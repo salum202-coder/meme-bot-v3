@@ -6,55 +6,85 @@ def calculate_scores(token: dict, safety: dict) -> dict:
     structure = 0
     hype = 0
 
-    volume_1h = token.get("volume_1h", 0)
-    if volume_1h >= 250_000:
-        momentum += 12
-    elif volume_1h >= 100_000:
-        momentum += 8
-    elif volume_1h >= 50_000:
-        momentum += 5
+    volume_1h = float(token.get("volume_1h", 0))
+    buys = int(token.get("buys_1h", 0))
+    sells = int(token.get("sells_1h", 0))
+    price_change = float(token.get("price_change_1h", 0))
+    liquidity = float(token.get("liquidity", 0))
+    market_cap = float(token.get("market_cap", 0))
 
-    buys = token.get("buys_1h", 0)
-    sells = token.get("sells_1h", 0)
-    if buys > sells:
-        momentum += 8
-    elif buys == sells and buys > 0:
+    total_txns = buys + sells
+    buy_ratio = buys / total_txns if total_txns > 0 else 0
+    volume_per_txn = volume_1h / total_txns if total_txns > 0 else 0
+
+    # ======================
+    # 🔥 MOMENTUM (ذكي)
+    # ======================
+
+    if volume_1h >= 250_000:
+        momentum += 10
+    elif volume_1h >= 120_000:
+        momentum += 7
+    elif volume_1h >= 60_000:
         momentum += 4
 
-    price_change = token.get("price_change_1h", 0)
-    if 5 <= price_change <= 80:
+    if buy_ratio >= 0.60:
         momentum += 10
-    elif 0 < price_change < 5:
-        momentum += 5
-    elif price_change > 120:
-        momentum -= 5
+    elif buy_ratio >= 0.55:
+        momentum += 7
+    elif buy_ratio >= 0.50:
+        momentum += 4
 
-    liquidity = token.get("liquidity", 0)
-    market_cap = token.get("market_cap", 0)
-    if liquidity >= 50_000:
-        structure += 8
-    elif liquidity >= 20_000:
-        structure += 5
+    if 5 <= price_change <= 25:
+        momentum += 10
+    elif 2 <= price_change < 5:
+        momentum += 5
+    elif price_change > 40:
+        momentum -= 6
+
+    if volume_per_txn >= 300:
+        momentum += 6
+    elif volume_per_txn >= 150:
+        momentum += 3
+
+    # ======================
+    # 🧱 STRUCTURE
+    # ======================
+
+    if liquidity >= 80_000:
+        structure += 10
+    elif liquidity >= 40_000:
+        structure += 6
 
     if market_cap > 0 and liquidity > 0:
-        ratio = liquidity / market_cap if market_cap else 0
-        if 0.02 <= ratio <= 0.35:
+        ratio = liquidity / market_cap
+        if 0.03 <= ratio <= 0.30:
             structure += 8
         else:
             structure += 3
 
     if token.get("price", 0) > 0:
-        structure += 4
+        structure += 3
+
+    # ======================
+    # 📣 HYPE (خفيف)
+    # ======================
 
     if token.get("socials_count", 0) > 0:
-        hype += 5
+        hype += 4
     if token.get("websites_count", 0) > 0:
-        hype += 3
+        hype += 2
     if token.get("source") == "dex_boosts":
         hype += 2
 
+    # ======================
+    # 🛡️ SAFETY
+    # ======================
+
     safety_score = safety["safety_score"]
+
     total = max(0, min(100, safety_score + momentum + structure + hype))
+
     return {
         "total_score": total,
         "safety_score": safety_score,
