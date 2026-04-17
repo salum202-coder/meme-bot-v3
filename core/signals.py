@@ -17,6 +17,7 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
 
     total_txns = buys_1h + sells_1h
     buy_ratio = buys_1h / total_txns if total_txns > 0 else 0.0
+    volume_per_txn = volume_1h / total_txns if total_txns > 0 else 0.0
 
     if "overheated price action" in red_flags:
         return {"signal": "IGNORE", "reason": "Overheated token"}
@@ -30,7 +31,7 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
     if price_change_1h <= -50:
         return {"signal": "IGNORE", "reason": "Heavy dump in 1h"}
 
-    if price_change_1h >= 80:
+    if price_change_1h >= 60:
         return {"signal": "IGNORE", "reason": "Overextended pump in 1h"}
 
     if liquidity < settings.min_liquidity:
@@ -42,19 +43,41 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
     if total_txns < settings.min_txns_1h:
         return {"signal": "IGNORE", "reason": "Low transaction activity"}
 
+    healthy_momentum = all(
+        [
+            5 <= price_change_1h <= 30,
+            buy_ratio >= 0.55,
+            buys_1h > sells_1h,
+            volume_per_txn >= 200,
+        ]
+    )
+
+    weak_pump = any(
+        [
+            price_change_1h > 35,
+            buy_ratio < 0.50,
+        ]
+    )
+
+    market_quality = all(
+        [
+            liquidity >= settings.min_liquidity * 1.2,
+            volume_1h >= settings.min_volume_1h * 1.2,
+        ]
+    )
+
     strong_entry_conditions = all(
         [
             total >= settings.entry_score_threshold,
             risk_level in ("low", "medium"),
-            price_change_1h >= 5,
-            price_change_1h <= 35,
-            buy_ratio >= 0.52,
-            buys_1h >= sells_1h,
+            healthy_momentum,
+            not weak_pump,
+            market_quality,
         ]
     )
 
     if strong_entry_conditions:
-        return {"signal": "ENTRY_CANDIDATE", "reason": "High score with healthy momentum"}
+        return {"signal": "ENTRY_CANDIDATE", "reason": "High score with healthy early momentum"}
 
     if total >= settings.alert_score_threshold:
         return {"signal": "ALERT", "reason": "Strong watch"}
