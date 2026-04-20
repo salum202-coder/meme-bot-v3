@@ -19,6 +19,9 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
     buy_ratio = buys_1h / total_txns if total_txns > 0 else 0.0
     volume_per_txn = volume_1h / total_txns if total_txns > 0 else 0.0
 
+    # ======================
+    # 🛑 HARD REJECTIONS
+    # ======================
     if "overheated price action" in red_flags:
         return {"signal": "IGNORE", "reason": "Overheated token"}
 
@@ -43,6 +46,25 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
     if total_txns < settings.min_txns_1h:
         return {"signal": "IGNORE", "reason": "Low transaction activity"}
 
+    # ======================
+    # 🚀 VOLUME SPIKE LOGIC
+    # ======================
+    volume_spike = (
+        volume_1h >= 180_000 and
+        total_txns >= 300 and
+        volume_per_txn >= 200
+    )
+
+    strong_volume_spike = (
+        volume_1h >= 300_000 and
+        total_txns >= 500 and
+        volume_per_txn >= 250 and
+        buy_ratio >= 0.55
+    )
+
+    # ======================
+    # 🔥 MOMENTUM QUALITY
+    # ======================
     healthy_momentum = all(
         [
             5 <= price_change_1h <= 30,
@@ -66,6 +88,9 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
         ]
     )
 
+    # ======================
+    # 🎯 ENTRY CONDITIONS
+    # ======================
     strong_entry_conditions = all(
         [
             total >= settings.entry_score_threshold,
@@ -73,13 +98,33 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
             healthy_momentum,
             not weak_pump,
             market_quality,
+            volume_spike,
         ]
     )
+
+    premium_entry_conditions = all(
+        [
+            total >= settings.entry_score_threshold,
+            risk_level == "low",
+            healthy_momentum,
+            not weak_pump,
+            market_quality,
+            strong_volume_spike,
+        ]
+    )
+
+    if premium_entry_conditions:
+        return {"signal": "ENTRY_CANDIDATE", "reason": "Premium setup with strong volume spike"}
 
     if strong_entry_conditions:
         return {"signal": "ENTRY_CANDIDATE", "reason": "High score with healthy early momentum"}
 
+    # ======================
+    # 👀 ALERT / WATCH
+    # ======================
     if total >= settings.alert_score_threshold:
+        if volume_spike or strong_volume_spike:
+            return {"signal": "ALERT", "reason": "Strong watch with volume spike"}
         return {"signal": "ALERT", "reason": "Strong watch"}
 
     if total >= settings.watch_score_threshold:
