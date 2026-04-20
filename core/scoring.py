@@ -18,9 +18,10 @@ def calculate_scores(token: dict, safety: dict) -> dict:
     volume_per_txn = volume_1h / total_txns if total_txns > 0 else 0
 
     # ======================
-    # 🔥 MOMENTUM (ذكي)
+    # 🔥 MOMENTUM
     # ======================
 
+    # Base volume score
     if volume_1h >= 250_000:
         momentum += 10
     elif volume_1h >= 120_000:
@@ -28,6 +29,7 @@ def calculate_scores(token: dict, safety: dict) -> dict:
     elif volume_1h >= 60_000:
         momentum += 4
 
+    # Buy pressure
     if buy_ratio >= 0.60:
         momentum += 10
     elif buy_ratio >= 0.55:
@@ -35,6 +37,7 @@ def calculate_scores(token: dict, safety: dict) -> dict:
     elif buy_ratio >= 0.50:
         momentum += 4
 
+    # Healthy price movement
     if 5 <= price_change <= 25:
         momentum += 10
     elif 2 <= price_change < 5:
@@ -42,10 +45,34 @@ def calculate_scores(token: dict, safety: dict) -> dict:
     elif price_change > 40:
         momentum -= 6
 
+    # Transaction quality
     if volume_per_txn >= 300:
-        momentum += 6
+        momentum += 4
     elif volume_per_txn >= 150:
-        momentum += 3
+        momentum += 2
+
+    # ======================
+    # 🚀 VOLUME SPIKE LOGIC
+    # ======================
+    # High volume + strong participation + meaningful transaction size
+    volume_spike = (
+        volume_1h >= 180_000 and
+        total_txns >= 300 and
+        volume_per_txn >= 200
+    )
+
+    strong_volume_spike = (
+        volume_1h >= 300_000 and
+        total_txns >= 500 and
+        volume_per_txn >= 250 and
+        buy_ratio >= 0.55
+    )
+
+    if volume_spike:
+        momentum += 4
+
+    if strong_volume_spike:
+        momentum += 6
 
     # ======================
     # 🧱 STRUCTURE
@@ -67,7 +94,7 @@ def calculate_scores(token: dict, safety: dict) -> dict:
         structure += 3
 
     # ======================
-    # 📣 HYPE (خفيف)
+    # 📣 HYPE
     # ======================
 
     if token.get("socials_count", 0) > 0:
