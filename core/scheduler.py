@@ -22,25 +22,37 @@ def fetch_token_price(address: str) -> float | None:
     payload = http.get_json(f"https://api.dexscreener.com/latest/dex/tokens/{address}") or {}
     pairs = payload.get("pairs") or []
     sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
+
     if not sol_pairs:
         return None
-    pair = max(sol_pairs, key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0), default=None)
+
+    pair = max(
+        sol_pairs,
+        key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0),
+        default=None,
+    )
+
     if not pair:
         return None
+
     return float(pair.get("priceUsd") or 0)
 
 
 async def run_scan_cycle(context):
     chat_id = context.bot_data.get("chat_id") or context.application.bot_data.get("default_chat_id")
+
     if not chat_id:
         logger.info("No chat id available yet; skipping notifications")
+
     tokens = discover_tokens(http)
     logger.info("Discovered %s tokens", len(tokens))
+
     for raw_token in tokens:
         if token_exists(raw_token["address"]):
             continue
 
         token = enrich_token(http, raw_token)
+
         filter_result = apply_initial_filters(token)
         if not filter_result["passed"]:
             save_discovered_token(token, "IGNORE", 0)
@@ -51,6 +63,7 @@ async def run_scan_cycle(context):
         signal = classify_signal(token, safety, scores)
 
         save_discovered_token(token, signal["signal"], scores["total_score"])
+
         save_snapshot(
             {
                 "address": token["address"],
@@ -66,19 +79,40 @@ async def run_scan_cycle(context):
             }
         )
 
+        # Send Telegram alerts automatically for useful signals.
         if chat_id and signal["signal"] in {"WATCH", "ALERT", "ENTRY_CANDIDATE"}:
-            await context.bot.send_message(chat_id=chat_id, text=build_token_alert(token, safety, scores, signal))
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=build_token_alert(token, safety, scores, signal),
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
 
         position = maybe_open_paper_trade(token, signal)
+
         if chat_id and position:
-            await context.bot.send_message(chat_id=chat_id, text=build_position_open_alert(position))
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=build_position_open_alert(position),
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
 
 
 async def run_position_cycle(context):
     chat_id = context.bot_data.get("chat_id") or context.application.bot_data.get("default_chat_id")
+
     if not chat_id:
         return
+
     evaluate_positions(
         fetch_price_func=fetch_token_price,
-        notify_func=lambda text: context.application.create_task(context.bot.send_message(chat_id=chat_id, text=text)),
+        notify_func=lambda text: context.application.create_task(
+            context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        ),
     )
