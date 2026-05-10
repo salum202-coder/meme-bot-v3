@@ -79,12 +79,10 @@ async def run_scan_cycle(context):
             }
         )
 
-        # Send Telegram alerts automatically for useful signals.
         if chat_id and signal["signal"] in {"WATCH", "ALERT", "ENTRY_CANDIDATE"}:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=build_token_alert(token, safety, scores, signal),
-                parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
 
@@ -94,7 +92,6 @@ async def run_scan_cycle(context):
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=build_position_open_alert(position),
-                parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
 
@@ -111,7 +108,6 @@ async def run_position_cycle(context):
             context.bot.send_message(
                 chat_id=chat_id,
                 text=text,
-                parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
         ),
