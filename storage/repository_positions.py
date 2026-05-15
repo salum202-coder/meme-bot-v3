@@ -4,116 +4,87 @@ from typing import Any
 from storage.db import get_conn
 
 
-def token_exists(address: str) -> bool:
+def open_position(position: dict[str, Any]) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO paper_positions(
+                address, symbol, entry_price, quantity, allocated_capital,
+                stop_loss, take_profit, trailing_stop_percent,
+                highest_price, status, opened_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                position["address"],
+                position.get("symbol"),
+                position["entry_price"],
+                position["quantity"],
+                position["allocated_capital"],
+                position["stop_loss"],
+                position["take_profit"],
+                position["trailing_stop_percent"],
+                position["highest_price"],
+                position["status"],
+                position["opened_at"],
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def get_open_positions() -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM paper_positions WHERE status = 'OPEN' ORDER BY id DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def count_open_positions() -> int:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT 1 FROM discovered_tokens WHERE address = ?",
+            "SELECT COUNT(*) AS c FROM paper_positions WHERE status = 'OPEN'"
+        ).fetchone()
+        return int(row["c"])
+
+
+def has_open_position(address: str) -> bool:
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM paper_positions
+            WHERE address = ? AND status = 'OPEN'
+            LIMIT 1
+            """,
             (address,),
         ).fetchone()
         return row is not None
 
 
-def get_discovered_token(address: str) -> dict[str, Any] | None:
-    with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT address, symbol, name, source, discovered_at, last_signal, last_total_score
-            FROM discovered_tokens
-            WHERE address = ?
-            """,
-            (address,),
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def save_discovered_token(token: dict[str, Any], signal: str, total_score: float) -> None:
-    address = token.get("address")
-    if not address:
-        return
-
-    with get_conn() as conn:
-        existing = conn.execute(
-            "SELECT 1 FROM discovered_tokens WHERE address = ?",
-            (address,),
-        ).fetchone()
-
-        if existing:
-            conn.execute(
-                """
-                UPDATE discovered_tokens
-                SET symbol = ?,
-                    name = ?,
-                    source = ?,
-                    last_signal = ?,
-                    last_total_score = ?
-                WHERE address = ?
-                """,
-                (
-                    token.get("symbol"),
-                    token.get("name"),
-                    token.get("source"),
-                    signal,
-                    total_score,
-                    address,
-                ),
-            )
-        else:
-            conn.execute(
-                """
-                INSERT INTO discovered_tokens(
-                    address, symbol, name, source, discovered_at, last_signal, last_total_score
-                )
-                VALUES(?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    address,
-                    token.get("symbol"),
-                    token.get("name"),
-                    token.get("source"),
-                    token.get("discovered_at"),
-                    signal,
-                    total_score,
-                ),
-            )
-
-        conn.commit()
-
-
-def save_snapshot(snapshot: dict[str, Any]) -> None:
+def update_highest_price(position_id: int, highest_price: float) -> None:
     with get_conn() as conn:
         conn.execute(
-            """
-            INSERT INTO token_snapshots(
-                address, timestamp, price, liquidity, volume_1h,
-                buys_1h, sells_1h, market_cap, total_score, signal
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                snapshot.get("address"),
-                snapshot.get("timestamp"),
-                snapshot.get("price"),
-                snapshot.get("liquidity"),
-                snapshot.get("volume_1h"),
-                snapshot.get("buys_1h"),
-                snapshot.get("sells_1h"),
-                snapshot.get("market_cap"),
-                snapshot.get("total_score"),
-                snapshot.get("signal"),
-            ),
+            "UPDATE paper_positions SET highest_price = ? WHERE id = ?",
+            (highest_price, position_id),
         )
         conn.commit()
 
 
-def recent_discoveries(limit: int = 10) -> list[dict[str, Any]]:
+def update_stop_loss(position_id: int, stop_loss: float) -> None:
     with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT address, symbol, name, last_signal, last_total_score, discovered_at
-            FROM discovered_tokens
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-        return [dict(row) for row in rows]
+        conn.execute(
+            "UPDATE paper_positions SET stop_loss = ? WHERE id = ?",
+            (stop_loss, position_id),
+        )
+        conn.commit()
+
+
+def close_position(position_id: int, closed_at: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE paper_positions SET status = 'CLOSED', closed_at = ? WHERE id = ?",
+            (closed_at, position_id),
+        )
+        conn.commit()
