@@ -46,6 +46,32 @@ def has_traded_token(address: str) -> bool:
         return row is not None
 
 
+def recent_trades(limit: int = 10) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                address,
+                symbol,
+                entry_price,
+                exit_price,
+                allocated_capital,
+                pnl_amount,
+                pnl_percent,
+                entry_reason,
+                exit_reason,
+                opened_at,
+                closed_at
+            FROM paper_trades
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def trade_stats() -> dict[str, Any]:
     with get_conn() as conn:
         row = conn.execute(
