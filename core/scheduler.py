@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from utils.http_client import HttpClient
 from utils.logger import setup_logger
-from storage.repository_tokens import token_exists, save_discovered_token, save_snapshot
+from storage.repository_tokens import (
+    get_discovered_token,
+    save_discovered_token,
+    save_snapshot,
+)
 from core.scanner import discover_tokens
 from core.enricher import enrich_token
 from core.filters import apply_initial_filters
@@ -38,6 +42,23 @@ def fetch_token_price(address: str) -> float | None:
     return float(pair.get("priceUsd") or 0)
 
 
+def _save_token_snapshot(token: dict, total_score: float, signal: str) -> None:
+    save_snapshot(
+        {
+            "address": token.get("address"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "price": token.get("price"),
+            "liquidity": token.get("liquidity"),
+            "volume_1h": token.get("volume_1h"),
+            "buys_1h": token.get("buys_1h"),
+            "sells_1h": token.get("sells_1h"),
+            "market_cap": token.get("market_cap"),
+            "total_score": total_score,
+            "signal": signal,
+        }
+    )
+
+
 async def run_scan_cycle(context):
     chat_id = context.bot_data.get("chat_id") or context.application.bot_data.get("default_chat_id")
 
@@ -48,38 +69,35 @@ async def run_scan_cycle(context):
     logger.info("Discovered %s tokens", len(tokens))
 
     for raw_token in tokens:
-        if token_exists(raw_token["address"]):
-            continue
+        existing = get_discovered_token(raw_token["address"])
+        previous_signal = existing.get("last_signal") if existing else None
 
         token = enrich_token(http, raw_token)
 
         filter_result = apply_initial_filters(token)
+
         if not filter_result["passed"]:
             save_discovered_token(token, "IGNORE", 0)
+            _save_token_snapshot(token, 0, "IGNORE")
             continue
 
         safety = evaluate_safety(token)
         scores = calculate_scores(token, safety)
         signal = classify_signal(token, safety, scores)
 
-        save_discovered_token(token, signal["signal"], scores["total_score"])
+        current_signal = signal["signal"]
+        total_score = scores["total_score"]
 
-        save_snapshot(
-            {
-                "address": token["address"],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "price": token.get("price"),
-                "liquidity": token.get("liquidity"),
-                "volume_1h": token.get("volume_1h"),
-                "buys_1h": token.get("buys_1h"),
-                "sells_1h": token.get("sells_1h"),
-                "market_cap": token.get("market_cap"),
-                "total_score": scores["total_score"],
-                "signal": signal["signal"],
-            }
+        save_discovered_token(token, current_signal, total_score)
+        _save_token_snapshot(token, total_score, current_signal)
+
+        should_send_alert = (
+            chat_id
+            and current_signal in {"WATCH", "ALERT", "ENTRY_CANDIDATE"}
+            and current_signal != previous_signal
         )
 
-        if chat_id and signal["signal"] in {"WATCH", "ALERT", "ENTRY_CANDIDATE"}:
+        if should_send_alert:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=build_token_alert(token, safety, scores, signal),
