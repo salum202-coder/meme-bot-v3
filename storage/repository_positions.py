@@ -4,41 +4,58 @@ from typing import Any
 from storage.db import get_conn
 
 
-def save_trade(trade: dict[str, Any]) -> None:
+def open_position(position: dict[str, Any]) -> int:
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
-            INSERT INTO paper_trades(
-                address, symbol, entry_price, exit_price, quantity, allocated_capital,
-                pnl_amount, pnl_percent, entry_reason, exit_reason, opened_at, closed_at
+            INSERT INTO paper_positions(
+                address, symbol, entry_price, quantity, allocated_capital,
+                stop_loss, take_profit, trailing_stop_percent,
+                highest_price, status, opened_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                trade["address"],
-                trade.get("symbol"),
-                trade["entry_price"],
-                trade["exit_price"],
-                trade["quantity"],
-                trade["allocated_capital"],
-                trade["pnl_amount"],
-                trade["pnl_percent"],
-                trade.get("entry_reason"),
-                trade.get("exit_reason"),
-                trade["opened_at"],
-                trade["closed_at"],
+                position["address"],
+                position.get("symbol"),
+                position["entry_price"],
+                position["quantity"],
+                position["allocated_capital"],
+                position["stop_loss"],
+                position["take_profit"],
+                position["trailing_stop_percent"],
+                position["highest_price"],
+                position["status"],
+                position["opened_at"],
             ),
         )
         conn.commit()
+        return int(cur.lastrowid)
 
 
-def has_traded_token(address: str) -> bool:
+def get_open_positions() -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM paper_positions WHERE status = 'OPEN' ORDER BY id DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def count_open_positions() -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM paper_positions WHERE status = 'OPEN'"
+        ).fetchone()
+        return int(row["c"])
+
+
+def has_open_position(address: str) -> bool:
     with get_conn() as conn:
         row = conn.execute(
             """
             SELECT 1
-            FROM paper_trades
-            WHERE address = ?
+            FROM paper_positions
+            WHERE address = ? AND status = 'OPEN'
             LIMIT 1
             """,
             (address,),
@@ -46,79 +63,28 @@ def has_traded_token(address: str) -> bool:
         return row is not None
 
 
-def recent_trades(limit: int = 10) -> list[dict[str, Any]]:
+def update_highest_price(position_id: int, highest_price: float) -> None:
     with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                id,
-                address,
-                symbol,
-                entry_price,
-                exit_price,
-                allocated_capital,
-                pnl_amount,
-                pnl_percent,
-                entry_reason,
-                exit_reason,
-                opened_at,
-                closed_at
-            FROM paper_trades
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-        return [dict(row) for row in rows]
+        conn.execute(
+            "UPDATE paper_positions SET highest_price = ? WHERE id = ?",
+            (highest_price, position_id),
+        )
+        conn.commit()
 
 
-def trade_stats() -> dict[str, Any]:
+def update_stop_loss(position_id: int, stop_loss: float) -> None:
     with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS total,
-                COALESCE(SUM(pnl_amount), 0) AS pnl,
-                COALESCE(SUM(CASE WHEN pnl_amount > 0 THEN 1 ELSE 0 END), 0) AS wins,
-                COALESCE(SUM(CASE WHEN pnl_amount < 0 THEN 1 ELSE 0 END), 0) AS losses,
-                COALESCE(SUM(CASE WHEN pnl_amount = 0 THEN 1 ELSE 0 END), 0) AS breakeven,
-                COALESCE(SUM(CASE WHEN pnl_amount > 0 THEN pnl_amount ELSE 0 END), 0) AS gross_profit,
-                COALESCE(ABS(SUM(CASE WHEN pnl_amount < 0 THEN pnl_amount ELSE 0 END)), 0) AS gross_loss,
-                COALESCE(AVG(CASE WHEN pnl_amount > 0 THEN pnl_percent END), 0) AS avg_win_pct,
-                COALESCE(AVG(CASE WHEN pnl_amount < 0 THEN pnl_percent END), 0) AS avg_loss_pct,
-                COALESCE(MAX(pnl_percent), 0) AS best_trade_pct,
-                COALESCE(MIN(pnl_percent), 0) AS worst_trade_pct
-            FROM paper_trades
-            """
-        ).fetchone()
+        conn.execute(
+            "UPDATE paper_positions SET stop_loss = ? WHERE id = ?",
+            (stop_loss, position_id),
+        )
+        conn.commit()
 
-        total = int(row["total"])
-        wins = int(row["wins"])
-        losses = int(row["losses"])
-        breakeven = int(row["breakeven"])
 
-        gross_profit = float(row["gross_profit"])
-        gross_loss = float(row["gross_loss"])
-
-        if gross_loss > 0:
-            profit_factor = gross_profit / gross_loss
-        elif gross_profit > 0:
-            profit_factor = 999.0
-        else:
-            profit_factor = 0.0
-
-        return {
-            "total": total,
-            "wins": wins,
-            "losses": losses,
-            "breakeven": breakeven,
-            "win_rate": (wins / total * 100) if total else 0.0,
-            "pnl": float(row["pnl"]),
-            "gross_profit": gross_profit,
-            "gross_loss": gross_loss,
-            "profit_factor": profit_factor,
-            "avg_win_pct": float(row["avg_win_pct"]),
-            "avg_loss_pct": float(row["avg_loss_pct"]),
-            "best_trade_pct": float(row["best_trade_pct"]),
-            "worst_trade_pct": float(row["worst_trade_pct"]),
-        }
+def close_position(position_id: int, closed_at: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE paper_positions SET status = 'CLOSED', closed_at = ? WHERE id = ?",
+            (closed_at, position_id),
+        )
+        conn.commit()
