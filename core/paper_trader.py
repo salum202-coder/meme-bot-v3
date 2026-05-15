@@ -2,27 +2,48 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from config import settings
-from storage.repository_positions import count_open_positions, open_position
+from storage.repository_positions import (
+    count_open_positions,
+    open_position,
+    has_open_position,
+)
+from storage.repository_trades import has_traded_token
 
 
 def maybe_open_paper_trade(token: dict, signal: dict) -> dict | None:
     if signal["signal"] != "ENTRY_CANDIDATE":
         return None
+
     if not settings.enable_auto_paper_entry:
         return None
+
+    address = token.get("address")
+    if not address:
+        return None
+
+    # Prevent duplicate open position on the same token
+    if has_open_position(address):
+        return None
+
+    # Prevent trading the same token again after a closed paper trade
+    if has_traded_token(address):
+        return None
+
     if count_open_positions() >= settings.max_open_positions:
         return None
+
     entry_price = float(token.get("price") or 0)
     if entry_price <= 0:
         return None
 
     capital = settings.starting_balance * settings.risk_per_trade
     quantity = capital / entry_price
+
     stop_loss = entry_price * (1 - settings.stop_loss_percent / 100)
     take_profit = entry_price * (1 + settings.take_profit_percent / 100)
 
     position = {
-        "address": token["address"],
+        "address": address,
         "symbol": token.get("symbol"),
         "entry_price": entry_price,
         "quantity": quantity,
@@ -34,6 +55,7 @@ def maybe_open_paper_trade(token: dict, signal: dict) -> dict | None:
         "status": "OPEN",
         "opened_at": datetime.now(timezone.utc).isoformat(),
     }
+
     position_id = open_position(position)
     position["id"] = position_id
     return position
