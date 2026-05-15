@@ -11,18 +11,34 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     discoveries = recent_discoveries(5)
     stats = trade_stats()
     open_positions = count_open_positions()
+
+    profit_factor = stats.get("profit_factor", 0)
+    profit_factor_text = "∞" if profit_factor >= 999 else f"{profit_factor:.2f}"
+
     lines = [
         "📊 Status",
         f"Open positions: {open_positions}",
         f"Closed trades: {stats['total']}",
+        f"Wins/Losses/BE: {stats['wins']}/{stats['losses']}/{stats['breakeven']}",
         f"Win rate: {stats['win_rate']:.2f}%",
         f"PnL: ${stats['pnl']:.2f}",
+        f"Profit factor: {profit_factor_text}",
+        f"Avg win: {stats['avg_win_pct']:.2f}%",
+        f"Avg loss: {stats['avg_loss_pct']:.2f}%",
+        f"Best trade: {stats['best_trade_pct']:.2f}%",
+        f"Worst trade: {stats['worst_trade_pct']:.2f}%",
         "",
         "Recent discoveries:",
     ]
+
     if discoveries:
         for item in discoveries:
-            lines.append(f"- {item.get('symbol') or 'UNKNOWN'} | {item.get('last_signal')} | {item.get('last_total_score')}")
+            score = item.get("last_total_score")
+            score_text = f"{float(score):.1f}" if score is not None else "0.0"
+            lines.append(
+                f"- {item.get('symbol') or 'UNKNOWN'} | {item.get('last_signal')} | {score_text}"
+            )
     else:
         lines.append("- no discoveries yet")
+
     await update.message.reply_text("\n".join(lines))
