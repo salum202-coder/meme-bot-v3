@@ -21,7 +21,7 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
     if not token.get("enrichment_ok"):
         return {"signal": "IGNORE", "reason": "No pair data"}
 
-    # hard risk only
+    # Hard risk protection
     if "critical contract risk" in red_flags:
         return {"signal": "IGNORE", "reason": "Critical contract risk"}
 
@@ -37,28 +37,31 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
     if total_txns < 15:
         return {"signal": "IGNORE", "reason": "Very low activity"}
 
-    # ENTRY
+    # ENTRY_CANDIDATE
     if (
-        total >= 70
+        total >= settings.entry_score_threshold
         and risk_level in ("low", "medium")
-        and liquidity >= 50_000
-        and volume_1h >= 40_000
+        and liquidity >= max(settings.min_liquidity, 50_000)
+        and volume_1h >= settings.min_volume_1h
         and buys_1h > sells_1h
-        and 0 <= price_change_1h <= 60
+        and 0 <= price_change_1h <= 80
     ):
-        return {"signal": "ENTRY_CANDIDATE", "reason": "Strong score with healthy buy pressure"}
+        return {
+            "signal": "ENTRY_CANDIDATE",
+            "reason": "Strong score with healthy buy pressure",
+        }
 
     # ALERT
     if (
-        total >= 55
-        and liquidity >= 30_000
+        total >= settings.alert_score_threshold
+        and liquidity >= settings.min_liquidity
         and volume_1h >= 20_000
         and buy_ratio >= 0.50
     ):
         return {"signal": "ALERT", "reason": "Good momentum candidate"}
 
     # WATCH
-    if total >= 35:
+    if total >= settings.watch_score_threshold:
         return {"signal": "WATCH", "reason": "Watchlist candidate"}
 
     return {"signal": "IGNORE", "reason": "Below threshold"}
