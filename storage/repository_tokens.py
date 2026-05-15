@@ -6,27 +6,76 @@ from storage.db import get_conn
 
 def token_exists(address: str) -> bool:
     with get_conn() as conn:
-        row = conn.execute("SELECT 1 FROM discovered_tokens WHERE address = ?", (address,)).fetchone()
+        row = conn.execute(
+            "SELECT 1 FROM discovered_tokens WHERE address = ?",
+            (address,),
+        ).fetchone()
         return row is not None
 
 
-def save_discovered_token(token: dict[str, Any], signal: str, total_score: float) -> None:
+def get_discovered_token(address: str) -> dict[str, Any] | None:
     with get_conn() as conn:
-        conn.execute(
+        row = conn.execute(
             """
-            INSERT OR IGNORE INTO discovered_tokens(address, symbol, name, source, discovered_at, last_signal, last_total_score)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            SELECT address, symbol, name, source, discovered_at, last_signal, last_total_score
+            FROM discovered_tokens
+            WHERE address = ?
             """,
-            (
-                token.get("address"),
-                token.get("symbol"),
-                token.get("name"),
-                token.get("source"),
-                token.get("discovered_at"),
-                signal,
-                total_score,
-            ),
-        )
+            (address,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def save_discovered_token(token: dict[str, Any], signal: str, total_score: float) -> None:
+    address = token.get("address")
+    if not address:
+        return
+
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM discovered_tokens WHERE address = ?",
+            (address,),
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                """
+                UPDATE discovered_tokens
+                SET symbol = ?,
+                    name = ?,
+                    source = ?,
+                    last_signal = ?,
+                    last_total_score = ?
+                WHERE address = ?
+                """,
+                (
+                    token.get("symbol"),
+                    token.get("name"),
+                    token.get("source"),
+                    signal,
+                    total_score,
+                    address,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO discovered_tokens(
+                    address, symbol, name, source, discovered_at, last_signal, last_total_score
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    address,
+                    token.get("symbol"),
+                    token.get("name"),
+                    token.get("source"),
+                    token.get("discovered_at"),
+                    signal,
+                    total_score,
+                ),
+            )
+
         conn.commit()
 
 
@@ -34,7 +83,10 @@ def save_snapshot(snapshot: dict[str, Any]) -> None:
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO token_snapshots(address, timestamp, price, liquidity, volume_1h, buys_1h, sells_1h, market_cap, total_score, signal)
+            INSERT INTO token_snapshots(
+                address, timestamp, price, liquidity, volume_1h,
+                buys_1h, sells_1h, market_cap, total_score, signal
+            )
             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -56,7 +108,12 @@ def save_snapshot(snapshot: dict[str, Any]) -> None:
 def recent_discoveries(limit: int = 10) -> list[dict[str, Any]]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT address, symbol, name, last_signal, last_total_score, discovered_at FROM discovered_tokens ORDER BY id DESC LIMIT ?",
+            """
+            SELECT address, symbol, name, last_signal, last_total_score, discovered_at
+            FROM discovered_tokens
+            ORDER BY id DESC
+            LIMIT ?
+            """,
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
