@@ -6,6 +6,7 @@ from telegram_bot.handlers_start import start_handler
 from telegram_bot.handlers_status import status_handler
 from telegram_bot.handlers_wallet import wallet_handler
 from telegram_bot.handlers_positions import positions_handler
+from telegram_bot.handlers_trades import trades_handler
 from telegram_bot.callbacks import generic_callback_handler
 from core.scheduler import run_scan_cycle, run_position_cycle
 
@@ -18,6 +19,7 @@ def build_bot_application():
     app.add_handler(CommandHandler("status", status_handler))
     app.add_handler(CommandHandler("wallet", wallet_handler))
     app.add_handler(CommandHandler("positions", positions_handler))
+    app.add_handler(CommandHandler("trades", trades_handler))
     app.add_handler(CallbackQueryHandler(generic_callback_handler))
 
     if app.job_queue is None:
