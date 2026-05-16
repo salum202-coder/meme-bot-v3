@@ -15,6 +15,9 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
     buys_1h = int(token.get("buys_1h") or 0)
     sells_1h = int(token.get("sells_1h") or 0)
 
+    momentum_score = float(scores.get("momentum_score", 0) or 0)
+    structure_score = float(scores.get("structure_score", 0) or 0)
+
     total_txns = buys_1h + sells_1h
     buy_ratio = buys_1h / total_txns if total_txns > 0 else 0.0
 
@@ -37,18 +40,38 @@ def classify_signal(token: dict, safety: dict, scores: dict) -> dict:
     if total_txns < 15:
         return {"signal": "IGNORE", "reason": "Very low activity"}
 
-    # ENTRY_CANDIDATE
+    # ======================================================
+    # Proof Phase V2 Protection:
+    # If token is already overheated, do NOT auto-enter.
+    # Keep it as ALERT only.
+    # ======================================================
+    if (
+        price_change_1h > 45
+        and total >= settings.alert_score_threshold
+        and liquidity >= settings.min_liquidity
+        and volume_1h >= 20_000
+        and buy_ratio >= 0.50
+    ):
+        return {
+            "signal": "ALERT",
+            "reason": "Overheated move, alert only - no auto entry",
+        }
+
+    # ENTRY_CANDIDATE - stricter rules
     if (
         total >= settings.entry_score_threshold
         and risk_level in ("low", "medium")
-        and liquidity >= max(settings.min_liquidity, 50_000)
-        and volume_1h >= settings.min_volume_1h
-        and buys_1h > sells_1h
-        and 0 <= price_change_1h <= 80
+        and liquidity >= max(settings.min_liquidity, 60_000)
+        and volume_1h >= max(settings.min_volume_1h, 80_000)
+        and total_txns >= max(settings.min_txns_1h, 150)
+        and buy_ratio >= 0.56
+        and momentum_score >= 18
+        and structure_score >= 15
+        and 3 <= price_change_1h <= 45
     ):
         return {
             "signal": "ENTRY_CANDIDATE",
-            "reason": "Strong score with healthy buy pressure",
+            "reason": "Strong score with controlled momentum and healthy buy pressure",
         }
 
     # ALERT
