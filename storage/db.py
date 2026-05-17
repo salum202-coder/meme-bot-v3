@@ -67,6 +67,14 @@ def init_db() -> None:
                 opened_at TEXT NOT NULL,
                 closed_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS wallet_watch_state (
+                wallet_address TEXT PRIMARY KEY,
+                label TEXT,
+                last_signature TEXT,
+                last_seen_at TEXT,
+                updated_at TEXT
+            );
             """
         )
         conn.commit()
