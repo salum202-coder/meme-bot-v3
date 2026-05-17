@@ -25,7 +25,7 @@ WATCH_WALLETS: dict[str, str] = {
 }
 
 
-def _short(value: str, left: int = 6, right: int = 6) -> str:
+def _short(value: str | None, left: int = 6, right: int = 6) -> str:
     if not value:
         return "N/A"
     if len(value) <= left + right:
@@ -39,7 +39,7 @@ def _format_time(block_time: int | None) -> str:
     return datetime.fromtimestamp(block_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def fetch_wallet_signatures(wallet_address: str, limit: int = 5) -> list[dict[str, Any]]:
+def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[str, Any]]:
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -66,22 +66,53 @@ def fetch_wallet_signatures(wallet_address: str, limit: int = 5) -> list[dict[st
     return result
 
 
-def build_wallet_activity_alert(label: str, wallet_address: str, tx: dict[str, Any]) -> str:
-    signature = tx.get("signature") or ""
-    err = tx.get("err")
-    status = "Success" if err is None else "Failed"
-    block_time = tx.get("blockTime")
+def _is_success(tx: dict[str, Any]) -> bool:
+    return tx.get("err") is None
 
-    return (
-        "👀 Cluster Activity Detected\n\n"
-        f"Label: {label}\n"
-        f"Wallet: {_short(wallet_address)}\n"
-        f"Status: {status}\n"
-        f"Time: {_format_time(block_time)}\n\n"
-        f"Tx:\n{signature}\n\n"
-        f"Solscan:\nhttps://solscan.io/tx/{signature}\n\n"
-        "Action: Review manually only. No auto entry."
+
+def build_wallet_activity_summary(
+    label: str,
+    wallet_address: str,
+    new_txs: list[dict[str, Any]],
+) -> str:
+    total = len(new_txs)
+    success_count = sum(1 for tx in new_txs if _is_success(tx))
+    failed_count = total - success_count
+
+    latest_tx = new_txs[0] if new_txs else {}
+    latest_signature = latest_tx.get("signature") or ""
+    latest_time = _format_time(latest_tx.get("blockTime"))
+
+    lines = [
+        "🕵️ Cluster Activity Summary",
+        "",
+        f"Label: {label}",
+        f"Wallet: {_short(wallet_address)}",
+        f"New txs: {total}",
+        f"Success: {success_count}",
+        f"Failed: {failed_count}",
+        f"Latest activity: {latest_time}",
+        "",
+        "Latest tx:",
+        f"https://solscan.io/tx/{latest_signature}",
+        "",
+        "Recent txs:",
+    ]
+
+    # Show latest 3 tx links only to reduce noise.
+    for tx in new_txs[:3]:
+        signature = tx.get("signature") or ""
+        status = "✅" if _is_success(tx) else "❌"
+        lines.append(f"{status} {_short(signature, 8, 8)}")
+
+    lines.extend(
+        [
+            "",
+            "Action: Review manually only. No auto entry.",
+        ]
     )
+
+    return "\n".join(lines)
 
 
 async def run_wallet_watch_cycle(context) -> None:
@@ -91,7 +122,7 @@ async def run_wallet_watch_cycle(context) -> None:
     )
 
     for label, wallet_address in WATCH_WALLETS.items():
-        signatures = fetch_wallet_signatures(wallet_address, limit=5)
+        signatures = fetch_wallet_signatures(wallet_address, limit=10)
 
         if not signatures:
             continue
@@ -117,7 +148,6 @@ async def run_wallet_watch_cycle(context) -> None:
         if latest_signature == last_seen:
             continue
 
-        new_txs: list[dict[str, Any]] = []
         known_index = None
 
         for index, tx in enumerate(signatures):
@@ -126,21 +156,21 @@ async def run_wallet_watch_cycle(context) -> None:
                 break
 
         if known_index is None:
-            # Last seen not found in the latest batch. Alert latest only to avoid flooding.
+            # Last seen not found in the latest batch.
+            # Alert latest only to avoid flooding.
             new_txs = [signatures[0]]
         else:
             new_txs = signatures[:known_index]
 
-        # Oldest to newest, max 3 alerts per wallet per cycle.
-        new_txs = list(reversed(new_txs))[-3:]
+        # Keep latest first and cap to 10.
+        new_txs = new_txs[:10]
 
-        if chat_id:
-            for tx in new_txs:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=build_wallet_activity_alert(label, wallet_address, tx),
-                    disable_web_page_preview=True,
-                )
+        if chat_id and new_txs:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=build_wallet_activity_summary(label, wallet_address, new_txs),
+                disable_web_page_preview=True,
+            )
 
         save_wallet_signature(
             wallet_address=wallet_address,
