@@ -33,6 +33,6 @@ def build_bot_application():
     app.job_queue.run_repeating(run_position_cycle, interval=settings.position_check_interval_seconds, first=15)
 
     # Wallet Watch V1 - alerts only, no paper/live entries.
-    app.job_queue.run_repeating(run_wallet_watch_cycle, interval=60, first=25)
+    app.job_queue.run_repeating(run_wallet_watch_cycle, interval=300, first=25)
 
     return app
