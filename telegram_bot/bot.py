@@ -7,8 +7,10 @@ from telegram_bot.handlers_status import status_handler
 from telegram_bot.handlers_wallet import wallet_handler
 from telegram_bot.handlers_positions import positions_handler
 from telegram_bot.handlers_trades import trades_handler
+from telegram_bot.handlers_wallet_watch import cluster_handler
 from telegram_bot.callbacks import generic_callback_handler
 from core.scheduler import run_scan_cycle, run_position_cycle
+from core.wallet_watcher import run_wallet_watch_cycle
 
 
 def build_bot_application():
@@ -20,6 +22,8 @@ def build_bot_application():
     app.add_handler(CommandHandler("wallet", wallet_handler))
     app.add_handler(CommandHandler("positions", positions_handler))
     app.add_handler(CommandHandler("trades", trades_handler))
+    app.add_handler(CommandHandler("cluster", cluster_handler))
+    app.add_handler(CommandHandler("watch_wallets", cluster_handler))
     app.add_handler(CallbackQueryHandler(generic_callback_handler))
 
     if app.job_queue is None:
@@ -27,4 +31,8 @@ def build_bot_application():
 
     app.job_queue.run_repeating(run_scan_cycle, interval=settings.scan_interval_seconds, first=5)
     app.job_queue.run_repeating(run_position_cycle, interval=settings.position_check_interval_seconds, first=15)
+
+    # Wallet Watch V1 - alerts only, no paper/live entries.
+    app.job_queue.run_repeating(run_wallet_watch_cycle, interval=60, first=25)
+
     return app
