@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import requests
@@ -40,6 +41,13 @@ def _format_time(block_time: int | None) -> str:
     return datetime.fromtimestamp(block_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+def _fmt_decimal(value: Decimal, places: int = 6) -> str:
+    try:
+        return f"{float(value):,.{places}f}"
+    except Exception:
+        return str(value)
+
+
 def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[str, Any]]:
     payload = {
         "jsonrpc": "2.0",
@@ -47,9 +55,7 @@ def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[s
         "method": "getSignaturesForAddress",
         "params": [
             wallet_address,
-            {
-                "limit": limit,
-            },
+            {"limit": limit},
         ],
     }
 
@@ -99,7 +105,104 @@ def _is_success(tx: dict[str, Any]) -> bool:
     return tx.get("err") is None
 
 
-def classify_transaction(signature: str) -> dict[str, Any]:
+def _get_account_keys(details: dict[str, Any]) -> list[str]:
+    message = ((details.get("transaction") or {}).get("message") or {})
+    account_keys = message.get("accountKeys") or []
+
+    keys: list[str] = []
+    for item in account_keys:
+        if isinstance(item, dict):
+            pubkey = item.get("pubkey")
+        else:
+            pubkey = str(item)
+
+        if pubkey:
+            keys.append(pubkey)
+
+    return keys
+
+
+def _sol_delta_for_wallet(details: dict[str, Any], wallet_address: str) -> Decimal:
+    meta = details.get("meta") or {}
+    pre_balances = meta.get("preBalances") or []
+    post_balances = meta.get("postBalances") or []
+    account_keys = _get_account_keys(details)
+
+    try:
+        wallet_index = account_keys.index(wallet_address)
+    except ValueError:
+        return Decimal("0")
+
+    if wallet_index >= len(pre_balances) or wallet_index >= len(post_balances):
+        return Decimal("0")
+
+    pre_lamports = Decimal(str(pre_balances[wallet_index]))
+    post_lamports = Decimal(str(post_balances[wallet_index]))
+
+    return (post_lamports - pre_lamports) / Decimal("1000000000")
+
+
+def _token_amount_from_balance(item: dict[str, Any]) -> Decimal:
+    ui_token_amount = item.get("uiTokenAmount") or {}
+    raw_amount = ui_token_amount.get("amount")
+
+    if raw_amount is None:
+        ui_amount_string = ui_token_amount.get("uiAmountString")
+        if ui_amount_string is None:
+            return Decimal("0")
+        return Decimal(str(ui_amount_string))
+
+    decimals = int(ui_token_amount.get("decimals") or 0)
+    return Decimal(str(raw_amount)) / (Decimal(10) ** decimals)
+
+
+def _token_deltas_for_wallet(details: dict[str, Any], wallet_address: str) -> list[dict[str, Any]]:
+    meta = details.get("meta") or {}
+    pre_token_balances = meta.get("preTokenBalances") or []
+    post_token_balances = meta.get("postTokenBalances") or []
+
+    balances: dict[str, dict[str, Decimal]] = {}
+
+    def add_side(items: list[dict[str, Any]], side: str) -> None:
+        for item in items:
+            owner = item.get("owner")
+            mint = item.get("mint")
+
+            if owner != wallet_address or not mint:
+                continue
+
+            if mint not in balances:
+                balances[mint] = {"pre": Decimal("0"), "post": Decimal("0")}
+
+            balances[mint][side] = _token_amount_from_balance(item)
+
+    add_side(pre_token_balances, "pre")
+    add_side(post_token_balances, "post")
+
+    changes: list[dict[str, Any]] = []
+
+    for mint, values in balances.items():
+        pre = values["pre"]
+        post = values["post"]
+        delta = post - pre
+
+        if delta == 0:
+            continue
+
+        changes.append(
+            {
+                "mint": mint,
+                "pre": pre,
+                "post": post,
+                "delta": delta,
+            }
+        )
+
+    changes.sort(key=lambda x: abs(x["delta"]), reverse=True)
+    return changes
+
+
+def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
     details = fetch_transaction_details(signature)
 
     if not details:
@@ -108,6 +211,8 @@ def classify_transaction(signature: str) -> dict[str, Any]:
             "type": "Unknown",
             "confidence": "low",
             "hints": ["transaction details unavailable"],
+            "sol_delta": Decimal("0"),
+            "token_changes": [],
         }
 
     meta = details.get("meta") or {}
@@ -119,27 +224,27 @@ def classify_transaction(signature: str) -> dict[str, Any]:
             "type": "Failed transaction",
             "confidence": "high",
             "hints": ["transaction failed"],
+            "sol_delta": Decimal("0"),
+            "token_changes": [],
         }
 
     logs = "\n".join(meta.get("logMessages") or [])
     raw_text = json.dumps(details, ensure_ascii=False).lower()
     logs_text = logs.lower()
 
+    sol_delta = _sol_delta_for_wallet(details, wallet_address)
+    token_changes = _token_deltas_for_wallet(details, wallet_address)
+
+    positive_tokens = [x for x in token_changes if x["delta"] > 0]
+    negative_tokens = [x for x in token_changes if x["delta"] < 0]
+
     hints: list[str] = []
 
-    # Strong trade signals
     if "placemarketorder" in raw_text or "place market order" in raw_text:
         hints.append("PlaceMarketOrder")
         if "phoenix" in raw_text or "phoenix" in logs_text:
             hints.append("Phoenix")
-        return {
-            "emoji": "🚨",
-            "type": "Possible Trade / Market Order",
-            "confidence": "medium-high",
-            "hints": hints,
-        }
 
-    # Common DEX / routing hints
     dex_keywords = [
         "jupiter",
         "raydium",
@@ -149,19 +254,59 @@ def classify_transaction(signature: str) -> dict[str, Any]:
         "swap",
         "route",
         "market",
+        "phoenix",
     ]
 
     matched_dex = [word for word in dex_keywords if word in raw_text or word in logs_text]
+    for word in matched_dex[:5]:
+        if word not in hints:
+            hints.append(word)
 
-    if matched_dex:
+    trade_like = bool(hints)
+
+    # Buy/Sell inference:
+    # BUY: wallet spends SOL and receives token.
+    # SELL: wallet loses token and receives SOL.
+    if positive_tokens and sol_delta < Decimal("-0.001"):
         return {
-            "emoji": "🚨",
-            "type": "Possible Swap / Trade",
+            "emoji": "🟢",
+            "type": "Possible BUY",
             "confidence": "medium",
-            "hints": matched_dex[:5],
+            "hints": hints or ["token received, SOL spent"],
+            "sol_delta": sol_delta,
+            "token_changes": token_changes,
         }
 
-    # Distribution / many transfers
+    if negative_tokens and sol_delta > Decimal("0.001"):
+        return {
+            "emoji": "🔴",
+            "type": "Possible SELL",
+            "confidence": "medium",
+            "hints": hints or ["token spent, SOL received"],
+            "sol_delta": sol_delta,
+            "token_changes": token_changes,
+        }
+
+    if trade_like and positive_tokens and negative_tokens:
+        return {
+            "emoji": "🚨",
+            "type": "Possible TOKEN SWAP",
+            "confidence": "medium",
+            "hints": hints,
+            "sol_delta": sol_delta,
+            "token_changes": token_changes,
+        }
+
+    if trade_like:
+        return {
+            "emoji": "🚨",
+            "type": "Possible Trade / Market Order",
+            "confidence": "medium-high",
+            "hints": hints,
+            "sol_delta": sol_delta,
+            "token_changes": token_changes,
+        }
+
     transfer_hits = raw_text.count('"transfer"') + logs_text.count("instruction: transfer")
     if transfer_hits >= 5:
         return {
@@ -169,24 +314,28 @@ def classify_transaction(signature: str) -> dict[str, Any]:
             "type": "Possible Distribution / Many Transfers",
             "confidence": "medium",
             "hints": [f"transfer signals: {transfer_hits}"],
+            "sol_delta": sol_delta,
+            "token_changes": token_changes,
         }
 
-    # Token account creation
     if "associated token program" in raw_text or "createassociatedtokenaccount" in raw_text or "createidempotent" in raw_text:
         return {
             "emoji": "🧾",
             "type": "Create Token Account",
             "confidence": "medium",
             "hints": ["associated token account activity"],
+            "sol_delta": sol_delta,
+            "token_changes": token_changes,
         }
 
-    # Normal transfer
     if transfer_hits > 0:
         return {
             "emoji": "↔️",
             "type": "Transfer",
             "confidence": "medium",
             "hints": [f"transfer signals: {transfer_hits}"],
+            "sol_delta": sol_delta,
+            "token_changes": token_changes,
         }
 
     return {
@@ -194,7 +343,23 @@ def classify_transaction(signature: str) -> dict[str, Any]:
         "type": "General Wallet Activity",
         "confidence": "low",
         "hints": ["no clear trade/transfer pattern detected"],
+        "sol_delta": sol_delta,
+        "token_changes": token_changes,
     }
+
+
+def _format_token_changes(token_changes: list[dict[str, Any]]) -> list[str]:
+    if not token_changes:
+        return ["Token changes: N/A"]
+
+    lines = ["Token changes:"]
+    for item in token_changes[:3]:
+        mint = item["mint"]
+        delta = item["delta"]
+        sign = "+" if delta > 0 else ""
+        lines.append(f"- {_short(mint)}: {sign}{_fmt_decimal(delta, 4)}")
+
+    return lines
 
 
 def build_wallet_activity_summary(
@@ -210,35 +375,49 @@ def build_wallet_activity_summary(
     latest_signature = latest_tx.get("signature") or ""
     latest_time = _format_time(latest_tx.get("blockTime"))
 
-    classification = classify_transaction(latest_signature) if latest_signature else {
+    analysis = analyze_transaction(latest_signature, wallet_address) if latest_signature else {
         "emoji": "❔",
         "type": "Unknown",
         "confidence": "low",
         "hints": [],
+        "sol_delta": Decimal("0"),
+        "token_changes": [],
     }
 
-    hints = classification.get("hints") or []
+    hints = analysis.get("hints") or []
     hints_text = ", ".join(hints[:5]) if hints else "N/A"
 
+    sol_delta = analysis.get("sol_delta", Decimal("0"))
+    sol_sign = "+" if sol_delta > 0 else ""
+
     lines = [
-        f"{classification['emoji']} Wallet Watch V2",
+        f"{analysis['emoji']} Wallet Watch V2.1",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
-        f"Detected: {classification['type']}",
-        f"Confidence: {classification['confidence']}",
+        f"Detected: {analysis['type']}",
+        f"Confidence: {analysis['confidence']}",
         f"Hints: {hints_text}",
+        f"SOL delta: {sol_sign}{_fmt_decimal(sol_delta, 6)} SOL",
         "",
-        f"New txs: {total}",
-        f"Success: {success_count}",
-        f"Failed: {failed_count}",
-        f"Latest activity: {latest_time}",
-        "",
-        "Latest tx:",
-        f"https://solscan.io/tx/{latest_signature}",
-        "",
-        "Recent txs:",
     ]
+
+    lines.extend(_format_token_changes(analysis.get("token_changes") or []))
+
+    lines.extend(
+        [
+            "",
+            f"New txs: {total}",
+            f"Success: {success_count}",
+            f"Failed: {failed_count}",
+            f"Latest activity: {latest_time}",
+            "",
+            "Latest tx:",
+            f"https://solscan.io/tx/{latest_signature}",
+            "",
+            "Recent txs:",
+        ]
+    )
 
     for tx in new_txs[:3]:
         signature = tx.get("signature") or ""
@@ -275,7 +454,6 @@ async def run_wallet_watch_cycle(context) -> None:
 
         last_seen = get_last_signature(wallet_address)
 
-        # First run: create baseline silently to avoid spam.
         if not last_seen:
             save_wallet_signature(
                 wallet_address=wallet_address,
