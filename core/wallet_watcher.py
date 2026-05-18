@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -66,8 +67,134 @@ def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[s
     return result
 
 
+def fetch_transaction_details(signature: str) -> dict[str, Any] | None:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTransaction",
+        "params": [
+            signature,
+            {
+                "encoding": "jsonParsed",
+                "maxSupportedTransactionVersion": 0,
+            },
+        ],
+    }
+
+    try:
+        response = requests.post(SOLANA_RPC_URL, json=payload, timeout=12)
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return None
+
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return None
+
+    return result
+
+
 def _is_success(tx: dict[str, Any]) -> bool:
     return tx.get("err") is None
+
+
+def classify_transaction(signature: str) -> dict[str, Any]:
+    details = fetch_transaction_details(signature)
+
+    if not details:
+        return {
+            "emoji": "❔",
+            "type": "Unknown",
+            "confidence": "low",
+            "hints": ["transaction details unavailable"],
+        }
+
+    meta = details.get("meta") or {}
+    err = meta.get("err")
+
+    if err is not None:
+        return {
+            "emoji": "❌",
+            "type": "Failed transaction",
+            "confidence": "high",
+            "hints": ["transaction failed"],
+        }
+
+    logs = "\n".join(meta.get("logMessages") or [])
+    raw_text = json.dumps(details, ensure_ascii=False).lower()
+    logs_text = logs.lower()
+
+    hints: list[str] = []
+
+    # Strong trade signals
+    if "placemarketorder" in raw_text or "place market order" in raw_text:
+        hints.append("PlaceMarketOrder")
+        if "phoenix" in raw_text or "phoenix" in logs_text:
+            hints.append("Phoenix")
+        return {
+            "emoji": "🚨",
+            "type": "Possible Trade / Market Order",
+            "confidence": "medium-high",
+            "hints": hints,
+        }
+
+    # Common DEX / routing hints
+    dex_keywords = [
+        "jupiter",
+        "raydium",
+        "orca",
+        "meteora",
+        "pump",
+        "swap",
+        "route",
+        "market",
+    ]
+
+    matched_dex = [word for word in dex_keywords if word in raw_text or word in logs_text]
+
+    if matched_dex:
+        return {
+            "emoji": "🚨",
+            "type": "Possible Swap / Trade",
+            "confidence": "medium",
+            "hints": matched_dex[:5],
+        }
+
+    # Distribution / many transfers
+    transfer_hits = raw_text.count('"transfer"') + logs_text.count("instruction: transfer")
+    if transfer_hits >= 5:
+        return {
+            "emoji": "💸",
+            "type": "Possible Distribution / Many Transfers",
+            "confidence": "medium",
+            "hints": [f"transfer signals: {transfer_hits}"],
+        }
+
+    # Token account creation
+    if "associated token program" in raw_text or "createassociatedtokenaccount" in raw_text or "createidempotent" in raw_text:
+        return {
+            "emoji": "🧾",
+            "type": "Create Token Account",
+            "confidence": "medium",
+            "hints": ["associated token account activity"],
+        }
+
+    # Normal transfer
+    if transfer_hits > 0:
+        return {
+            "emoji": "↔️",
+            "type": "Transfer",
+            "confidence": "medium",
+            "hints": [f"transfer signals: {transfer_hits}"],
+        }
+
+    return {
+        "emoji": "👀",
+        "type": "General Wallet Activity",
+        "confidence": "low",
+        "hints": ["no clear trade/transfer pattern detected"],
+    }
 
 
 def build_wallet_activity_summary(
@@ -83,11 +210,25 @@ def build_wallet_activity_summary(
     latest_signature = latest_tx.get("signature") or ""
     latest_time = _format_time(latest_tx.get("blockTime"))
 
+    classification = classify_transaction(latest_signature) if latest_signature else {
+        "emoji": "❔",
+        "type": "Unknown",
+        "confidence": "low",
+        "hints": [],
+    }
+
+    hints = classification.get("hints") or []
+    hints_text = ", ".join(hints[:5]) if hints else "N/A"
+
     lines = [
-        "🕵️ Cluster Activity Summary",
+        f"{classification['emoji']} Wallet Watch V2",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
+        f"Detected: {classification['type']}",
+        f"Confidence: {classification['confidence']}",
+        f"Hints: {hints_text}",
+        "",
         f"New txs: {total}",
         f"Success: {success_count}",
         f"Failed: {failed_count}",
@@ -99,7 +240,6 @@ def build_wallet_activity_summary(
         "Recent txs:",
     ]
 
-    # Show latest 3 tx links only to reduce noise.
     for tx in new_txs[:3]:
         signature = tx.get("signature") or ""
         status = "✅" if _is_success(tx) else "❌"
@@ -156,13 +296,10 @@ async def run_wallet_watch_cycle(context) -> None:
                 break
 
         if known_index is None:
-            # Last seen not found in the latest batch.
-            # Alert latest only to avoid flooding.
             new_txs = [signatures[0]]
         else:
             new_txs = signatures[:known_index]
 
-        # Keep latest first and cap to 10.
         new_txs = new_txs[:10]
 
         if chat_id and new_txs:
