@@ -26,6 +26,8 @@ WATCH_WALLETS: dict[str, str] = {
     "Cluster Gjct": "GjctEPhWA9ArYKWqGznuhYMzjJKTJCWXbKpdvbYokdDt",
 }
 
+MIN_SOL_DELTA_TO_ALERT = Decimal("0.05")
+
 
 def _short(value: str | None, left: int = 6, right: int = 6) -> str:
     if not value:
@@ -213,6 +215,8 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "hints": ["transaction details unavailable"],
             "sol_delta": Decimal("0"),
             "token_changes": [],
+            "notify": False,
+            "noise_reason": "No transaction details",
         }
 
     meta = details.get("meta") or {}
@@ -226,6 +230,8 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "hints": ["transaction failed"],
             "sol_delta": Decimal("0"),
             "token_changes": [],
+            "notify": False,
+            "noise_reason": "Failed transaction ignored",
         }
 
     logs = "\n".join(meta.get("logMessages") or [])
@@ -264,9 +270,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
 
     trade_like = bool(hints)
 
-    # Buy/Sell inference:
     # BUY: wallet spends SOL and receives token.
-    # SELL: wallet loses token and receives SOL.
     if positive_tokens and sol_delta < Decimal("-0.001"):
         return {
             "emoji": "🟢",
@@ -275,8 +279,11 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "hints": hints or ["token received, SOL spent"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
+            "notify": True,
+            "noise_reason": "",
         }
 
+    # SELL: wallet loses token and receives SOL.
     if negative_tokens and sol_delta > Decimal("0.001"):
         return {
             "emoji": "🔴",
@@ -285,8 +292,11 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "hints": hints or ["token spent, SOL received"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
+            "notify": True,
+            "noise_reason": "",
         }
 
+    # Token-to-token movement/swap.
     if trade_like and positive_tokens and negative_tokens:
         return {
             "emoji": "🚨",
@@ -295,19 +305,39 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "hints": hints,
             "sol_delta": sol_delta,
             "token_changes": token_changes,
+            "notify": True,
+            "noise_reason": "",
         }
 
-    if trade_like:
+    # Phoenix / market order with no visible fill.
+    # This is usually noise: only fee paid, no token balance change.
+    if trade_like and not token_changes and abs(sol_delta) < Decimal("0.001"):
         return {
-            "emoji": "🚨",
-            "type": "Possible Trade / Market Order",
-            "confidence": "medium-high",
+            "emoji": "⚪",
+            "type": "Trade order / no visible fill",
+            "confidence": "medium",
             "hints": hints,
             "sol_delta": sol_delta,
             "token_changes": token_changes,
+            "notify": False,
+            "noise_reason": "No token changes and only tiny SOL fee",
+        }
+
+    # Trade-like with a meaningful SOL movement.
+    if trade_like and abs(sol_delta) >= MIN_SOL_DELTA_TO_ALERT:
+        return {
+            "emoji": "🚨",
+            "type": "Possible Trade / Significant SOL Movement",
+            "confidence": "medium",
+            "hints": hints,
+            "sol_delta": sol_delta,
+            "token_changes": token_changes,
+            "notify": True,
+            "noise_reason": "",
         }
 
     transfer_hits = raw_text.count('"transfer"') + logs_text.count("instruction: transfer")
+
     if transfer_hits >= 5:
         return {
             "emoji": "💸",
@@ -316,6 +346,8 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "hints": [f"transfer signals: {transfer_hits}"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
+            "notify": True,
+            "noise_reason": "",
         }
 
     if "associated token program" in raw_text or "createassociatedtokenaccount" in raw_text or "createidempotent" in raw_text:
@@ -326,25 +358,31 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "hints": ["associated token account activity"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
+            "notify": False,
+            "noise_reason": "Token account creation ignored",
         }
 
-    if transfer_hits > 0:
+    if transfer_hits > 0 and abs(sol_delta) >= MIN_SOL_DELTA_TO_ALERT:
         return {
             "emoji": "↔️",
-            "type": "Transfer",
+            "type": "Large Transfer",
             "confidence": "medium",
             "hints": [f"transfer signals: {transfer_hits}"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
+            "notify": True,
+            "noise_reason": "",
         }
 
     return {
         "emoji": "👀",
         "type": "General Wallet Activity",
         "confidence": "low",
-        "hints": ["no clear trade/transfer pattern detected"],
+        "hints": ["no important pattern detected"],
         "sol_delta": sol_delta,
         "token_changes": token_changes,
+        "notify": False,
+        "noise_reason": "Low-signal wallet activity ignored",
     }
 
 
@@ -366,6 +404,8 @@ def build_wallet_activity_summary(
     label: str,
     wallet_address: str,
     new_txs: list[dict[str, Any]],
+    analysis: dict[str, Any],
+    ignored_count: int,
 ) -> str:
     total = len(new_txs)
     success_count = sum(1 for tx in new_txs if _is_success(tx))
@@ -375,15 +415,6 @@ def build_wallet_activity_summary(
     latest_signature = latest_tx.get("signature") or ""
     latest_time = _format_time(latest_tx.get("blockTime"))
 
-    analysis = analyze_transaction(latest_signature, wallet_address) if latest_signature else {
-        "emoji": "❔",
-        "type": "Unknown",
-        "confidence": "low",
-        "hints": [],
-        "sol_delta": Decimal("0"),
-        "token_changes": [],
-    }
-
     hints = analysis.get("hints") or []
     hints_text = ", ".join(hints[:5]) if hints else "N/A"
 
@@ -391,7 +422,7 @@ def build_wallet_activity_summary(
     sol_sign = "+" if sol_delta > 0 else ""
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V2.1",
+        f"{analysis['emoji']} Wallet Watch V2.2",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -407,7 +438,8 @@ def build_wallet_activity_summary(
     lines.extend(
         [
             "",
-            f"New txs: {total}",
+            f"New txs checked: {total}",
+            f"Ignored noise: {ignored_count}",
             f"Success: {success_count}",
             f"Failed: {failed_count}",
             f"Latest activity: {latest_time}",
@@ -480,13 +512,38 @@ async def run_wallet_watch_cycle(context) -> None:
 
         new_txs = new_txs[:10]
 
-        if chat_id and new_txs:
+        important_analysis = None
+        ignored_count = 0
+
+        # Analyze newest to oldest and alert only the first important one.
+        for tx in new_txs:
+            signature = tx.get("signature") or ""
+            if not signature:
+                ignored_count += 1
+                continue
+
+            analysis = analyze_transaction(signature, wallet_address)
+
+            if analysis.get("notify"):
+                important_analysis = analysis
+                break
+
+            ignored_count += 1
+
+        if chat_id and important_analysis:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=build_wallet_activity_summary(label, wallet_address, new_txs),
+                text=build_wallet_activity_summary(
+                    label=label,
+                    wallet_address=wallet_address,
+                    new_txs=new_txs,
+                    analysis=important_analysis,
+                    ignored_count=ignored_count,
+                ),
                 disable_web_page_preview=True,
             )
 
+        # Always update state, even if all txs were noise.
         save_wallet_signature(
             wallet_address=wallet_address,
             label=label,
