@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+
+from config import settings
 from utils.http_client import HttpClient
 from utils.logger import setup_logger
 from storage.repository_tokens import (
@@ -91,9 +93,12 @@ async def run_scan_cycle(context):
         save_discovered_token(token, current_signal, total_score)
         _save_token_snapshot(token, total_score, current_signal)
 
+        # Send Telegram token alerts only for strong entry candidates.
+        # This removes noisy WATCH / ALERT messages from Telegram.
         should_send_alert = (
             chat_id
-            and current_signal in {"WATCH", "ALERT", "ENTRY_CANDIDATE"}
+            and current_signal == "ENTRY_CANDIDATE"
+            and total_score >= settings.entry_score_threshold
             and current_signal != previous_signal
         )
 
