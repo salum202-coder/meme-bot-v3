@@ -7,15 +7,19 @@ from typing import Any
 
 import requests
 
+from storage.db import get_conn
 from storage.repository_wallet_watch import (
     get_last_signature,
     save_wallet_signature,
 )
 
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
+DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens"
+
+DHT8_MAIN_WALLET = "DHT8LqMZ4UcbgfL2ttXoUUXSnhmV9gNBYJcCZpP3NNY8"
 
 WATCH_WALLETS: dict[str, str] = {
-    "DHT8 Main": "DHT8LqMZ4UcbgfL2ttXoUUXSnhmV9gNBYJcCZpP3NNY8",
+    "DHT8 Main": DHT8_MAIN_WALLET,
     "BJsbr Signer": "BJsbrDPdpxvzP35TYJ7gmrcumqxVSqwDeEb4Gg3aV4Ax",
     "Cluster 3oUE": "3oUEaNt7uL7pjZ6gdiAiEVRp9ZCcGRec7B5aSvXcjbWS",
     "Cluster Fnpc": "Fnpcmk5umHWXKfpjLcTSqVig7tg3aXgW2jF3f4kiGQRU",
@@ -31,6 +35,16 @@ TOKEN_ALIASES: dict[str, str] = {
 }
 
 MIN_SOL_DELTA_TO_ALERT = Decimal("0.05")
+DHT8_BIG_BUY_SOL = Decimal("50")
+
+LIQUIDITY_RUG_USD = Decimal("1000")
+LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
+PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
+PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _short(value: str | None, left: int = 6, right: int = 6) -> str:
@@ -41,15 +55,36 @@ def _short(value: str | None, left: int = 6, right: int = 6) -> str:
     return f"{value[:left]}...{value[-right:]}"
 
 
-def _token_label(mint: str | None) -> str:
-    if not mint:
+def _to_decimal(value: Any, default: str = "0") -> Decimal:
+    try:
+        if value is None:
+            return Decimal(default)
+        return Decimal(str(value))
+    except Exception:
+        return Decimal(default)
+
+
+def _to_float(value: Any) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
+
+
+def _fmt_decimal(value: Decimal, places: int = 6) -> str:
+    try:
+        return f"{float(value):,.{places}f}"
+    except Exception:
+        return str(value)
+
+
+def _fmt_usd(value: Decimal | float | int | None) -> str:
+    if value is None:
         return "N/A"
-
-    name = TOKEN_ALIASES.get(mint)
-    if name:
-        return f"{name} ({_short(mint)})"
-
-    return _short(mint)
+    try:
+        return f"${float(value):,.2f}"
+    except Exception:
+        return "N/A"
 
 
 def _format_time(block_time: int | None) -> str:
@@ -58,11 +93,265 @@ def _format_time(block_time: int | None) -> str:
     return datetime.fromtimestamp(block_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def _fmt_decimal(value: Decimal, places: int = 6) -> str:
+def _token_label(mint: str | None) -> str:
+    if not mint:
+        return "N/A"
+
+    name = TOKEN_ALIASES.get(mint)
+    if name:
+        return f"{name} ({_short(mint)})"
+
+    active = get_active_token(mint)
+    if active and active.get("symbol"):
+        return f"{active['symbol']} ({_short(mint)})"
+
+    return _short(mint)
+
+
+def _ensure_active_token_table() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS active_token_watch (
+                mint TEXT PRIMARY KEY,
+                symbol TEXT,
+                name TEXT,
+                source_label TEXT,
+                source_wallet TEXT,
+                buy_signature TEXT,
+                entry_sol REAL,
+                entry_amount REAL,
+                entry_price_usd REAL,
+                entry_liquidity_usd REAL,
+                peak_price_usd REAL,
+                last_price_usd REAL,
+                last_liquidity_usd REAL,
+                last_checked_at TEXT,
+                status TEXT,
+                last_alert TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.commit()
+
+
+def get_active_token(mint: str) -> dict[str, Any] | None:
+    _ensure_active_token_table()
+
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM active_token_watch
+            WHERE mint = ?
+            """,
+            (mint,),
+        ).fetchone()
+
+        if not row:
+            return None
+
+        return dict(row)
+
+
+def list_active_tokens() -> list[dict[str, Any]]:
+    _ensure_active_token_table()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM active_token_watch
+            WHERE status = 'ACTIVE'
+            ORDER BY updated_at DESC
+            """
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+
+
+def save_active_token(
+    mint: str,
+    symbol: str | None,
+    name: str | None,
+    source_label: str,
+    source_wallet: str,
+    buy_signature: str,
+    entry_sol: Decimal,
+    entry_amount: Decimal,
+    entry_price_usd: Decimal,
+    entry_liquidity_usd: Decimal,
+) -> None:
+    _ensure_active_token_table()
+
+    now = _now_iso()
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO active_token_watch (
+                mint,
+                symbol,
+                name,
+                source_label,
+                source_wallet,
+                buy_signature,
+                entry_sol,
+                entry_amount,
+                entry_price_usd,
+                entry_liquidity_usd,
+                peak_price_usd,
+                last_price_usd,
+                last_liquidity_usd,
+                last_checked_at,
+                status,
+                last_alert,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(mint)
+            DO UPDATE SET
+                symbol = excluded.symbol,
+                name = excluded.name,
+                source_label = excluded.source_label,
+                source_wallet = excluded.source_wallet,
+                buy_signature = excluded.buy_signature,
+                entry_sol = excluded.entry_sol,
+                entry_amount = excluded.entry_amount,
+                entry_price_usd = excluded.entry_price_usd,
+                entry_liquidity_usd = excluded.entry_liquidity_usd,
+                peak_price_usd = MAX(active_token_watch.peak_price_usd, excluded.peak_price_usd),
+                last_price_usd = excluded.last_price_usd,
+                last_liquidity_usd = excluded.last_liquidity_usd,
+                last_checked_at = excluded.last_checked_at,
+                status = 'ACTIVE',
+                last_alert = '',
+                updated_at = excluded.updated_at
+            """,
+            (
+                mint,
+                symbol,
+                name,
+                source_label,
+                source_wallet,
+                buy_signature,
+                _to_float(entry_sol),
+                _to_float(entry_amount),
+                _to_float(entry_price_usd),
+                _to_float(entry_liquidity_usd),
+                _to_float(entry_price_usd),
+                _to_float(entry_price_usd),
+                _to_float(entry_liquidity_usd),
+                now,
+                "ACTIVE",
+                "",
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def update_active_token_market(
+    mint: str,
+    price_usd: Decimal,
+    liquidity_usd: Decimal,
+    alert_type: str | None = None,
+    status: str | None = None,
+) -> None:
+    _ensure_active_token_table()
+
+    existing = get_active_token(mint)
+    old_peak = _to_decimal(existing.get("peak_price_usd") if existing else 0)
+    new_peak = max(old_peak, price_usd)
+    now = _now_iso()
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE active_token_watch
+            SET
+                peak_price_usd = ?,
+                last_price_usd = ?,
+                last_liquidity_usd = ?,
+                last_checked_at = ?,
+                last_alert = COALESCE(?, last_alert),
+                status = COALESCE(?, status),
+                updated_at = ?
+            WHERE mint = ?
+            """,
+            (
+                _to_float(new_peak),
+                _to_float(price_usd),
+                _to_float(liquidity_usd),
+                now,
+                alert_type,
+                status,
+                now,
+                mint,
+            ),
+        )
+        conn.commit()
+
+
+def is_tracked_token(mint: str | None) -> bool:
+    if not mint:
+        return False
+
+    if mint in TOKEN_ALIASES:
+        return True
+
+    active = get_active_token(mint)
+    return bool(active and active.get("status") == "ACTIVE")
+
+
+def fetch_dex_token_info(mint: str) -> dict[str, Any] | None:
     try:
-        return f"{float(value):,.{places}f}"
+        response = requests.get(f"{DEXSCREENER_TOKEN_URL}/{mint}", timeout=10)
+        response.raise_for_status()
+        payload = response.json()
     except Exception:
-        return str(value)
+        return None
+
+    pairs = payload.get("pairs") or []
+    sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
+
+    if not sol_pairs:
+        return None
+
+    pair = max(
+        sol_pairs,
+        key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0),
+        default=None,
+    )
+
+    if not pair:
+        return None
+
+    base = pair.get("baseToken") or {}
+    liquidity = pair.get("liquidity") or {}
+    volume = pair.get("volume") or {}
+    price_change = pair.get("priceChange") or {}
+    txns = pair.get("txns") or {}
+    txns_h1 = txns.get("h1") or {}
+
+    return {
+        "mint": mint,
+        "symbol": base.get("symbol") or TOKEN_ALIASES.get(mint),
+        "name": base.get("name"),
+        "price_usd": _to_decimal(pair.get("priceUsd")),
+        "liquidity_usd": _to_decimal(liquidity.get("usd")),
+        "fdv": _to_decimal(pair.get("fdv")),
+        "market_cap": _to_decimal(pair.get("marketCap")),
+        "volume_h1": _to_decimal(volume.get("h1")),
+        "price_change_h1": _to_decimal(price_change.get("h1")),
+        "buys_h1": int(txns_h1.get("buys") or 0),
+        "sells_h1": int(txns_h1.get("sells") or 0),
+        "url": pair.get("url") or f"https://dexscreener.com/solana/{mint}",
+    }
 
 
 def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[str, Any]]:
@@ -237,6 +526,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "sol_delta": Decimal("0"),
             "token_changes": [],
             "notify": False,
+            "register_active": False,
             "noise_reason": "No transaction details",
         }
 
@@ -252,6 +542,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "sol_delta": Decimal("0"),
             "token_changes": [],
             "notify": False,
+            "register_active": False,
             "noise_reason": "Failed transaction ignored",
         }
 
@@ -292,73 +583,155 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
     trade_like = bool(hints)
     transfer_hits = raw_text.count('"transfer"') + logs_text.count("instruction: transfer")
 
-    # BUY: wallet spends SOL and receives token.
     if positive_tokens and sol_delta < Decimal("-0.001"):
+        spent_sol = abs(sol_delta)
+        primary_mint = positive_tokens[0].get("mint")
+        is_big_dht8_buy = wallet_address == DHT8_MAIN_WALLET and spent_sol >= DHT8_BIG_BUY_SOL
+
+        if is_big_dht8_buy:
+            return {
+                "emoji": "🟢",
+                "type": "DHT8 Big BUY",
+                "confidence": "high",
+                "hints": hints or ["token received, SOL spent"],
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": True,
+                "active_mint": primary_mint,
+                "noise_reason": "",
+            }
+
+        # Reduce noise: only notify non-DHT8 buys if the token is already tracked.
+        if is_tracked_token(primary_mint):
+            return {
+                "emoji": "🟢",
+                "type": "Tracked Token BUY",
+                "confidence": "medium",
+                "hints": hints or ["token received, SOL spent"],
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": False,
+                "active_mint": primary_mint,
+                "noise_reason": "",
+            }
+
         return {
             "emoji": "🟢",
-            "type": "Possible BUY",
-            "confidence": "medium",
-            "hints": hints or ["token received, SOL spent"],
+            "type": "Small / untracked BUY ignored",
+            "confidence": "low",
+            "hints": hints or ["untracked buy"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
-            "notify": True,
-            "noise_reason": "",
+            "notify": False,
+            "register_active": False,
+            "noise_reason": "Buy was not DHT8 Big BUY and token is not tracked",
         }
 
-    # SELL: wallet loses token and receives SOL.
     if negative_tokens and sol_delta > Decimal("0.001"):
+        primary_mint = negative_tokens[0].get("mint")
+
+        if is_tracked_token(primary_mint) or sol_delta >= DHT8_BIG_BUY_SOL:
+            return {
+                "emoji": "🔴",
+                "type": "Possible SELL / Tracked Token Exit",
+                "confidence": "medium-high",
+                "hints": hints or ["token spent, SOL received"],
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": False,
+                "active_mint": primary_mint,
+                "noise_reason": "",
+            }
+
         return {
             "emoji": "🔴",
-            "type": "Possible SELL",
-            "confidence": "medium",
-            "hints": hints or ["token spent, SOL received"],
+            "type": "Untracked SELL ignored",
+            "confidence": "low",
+            "hints": hints or ["untracked sell"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
-            "notify": True,
-            "noise_reason": "",
+            "notify": False,
+            "register_active": False,
+            "noise_reason": "Sell was for untracked token",
         }
 
-    # New V3 rule:
-    # Token leaves watched wallet without clear SOL received.
-    # This can mean distribution to other wallets before selling.
     if negative_tokens and abs(sol_delta) < Decimal("0.05"):
+        primary_mint = negative_tokens[0].get("mint")
+
+        if is_tracked_token(primary_mint):
+            return {
+                "emoji": "🟠",
+                "type": "Tracked Token Transfer OUT / Possible Distribution",
+                "confidence": "high",
+                "hints": hints or [f"tracked token balance decreased", f"transfer signals: {transfer_hits}"],
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": False,
+                "active_mint": primary_mint,
+                "noise_reason": "",
+            }
+
         return {
             "emoji": "🟠",
-            "type": "Token Transfer OUT / Possible Distribution",
-            "confidence": "medium-high",
-            "hints": hints or [f"token balance decreased", f"transfer signals: {transfer_hits}"],
+            "type": "Untracked Transfer OUT ignored",
+            "confidence": "low",
+            "hints": hints or [f"untracked token balance decreased"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
-            "notify": True,
-            "noise_reason": "",
+            "notify": False,
+            "register_active": False,
+            "noise_reason": "Transfer OUT was for untracked token",
         }
 
-    # New V3 rule:
-    # Token enters watched wallet without clear SOL spent.
-    # Useful for catching receiving wallets in the cluster.
     if positive_tokens and abs(sol_delta) < Decimal("0.05"):
+        primary_mint = positive_tokens[0].get("mint")
+
+        if is_tracked_token(primary_mint):
+            return {
+                "emoji": "📥",
+                "type": "Tracked Token Transfer IN / Cluster Receive",
+                "confidence": "medium",
+                "hints": hints or [f"tracked token balance increased", f"transfer signals: {transfer_hits}"],
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": False,
+                "active_mint": primary_mint,
+                "noise_reason": "",
+            }
+
         return {
             "emoji": "📥",
-            "type": "Token Transfer IN / Cluster Receive",
-            "confidence": "medium",
-            "hints": hints or [f"token balance increased", f"transfer signals: {transfer_hits}"],
+            "type": "Untracked Transfer IN ignored",
+            "confidence": "low",
+            "hints": hints or [f"untracked token balance increased"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
-            "notify": True,
-            "noise_reason": "",
+            "notify": False,
+            "register_active": False,
+            "noise_reason": "Transfer IN was for untracked token",
         }
 
     if trade_like and positive_tokens and negative_tokens:
-        return {
-            "emoji": "🚨",
-            "type": "Possible TOKEN SWAP",
-            "confidence": "medium",
-            "hints": hints,
-            "sol_delta": sol_delta,
-            "token_changes": token_changes,
-            "notify": True,
-            "noise_reason": "",
-        }
+        primary_mint = _primary_token_mint(token_changes)
+
+        if is_tracked_token(primary_mint):
+            return {
+                "emoji": "🚨",
+                "type": "Possible TOKEN SWAP / Tracked Token",
+                "confidence": "medium",
+                "hints": hints,
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": False,
+                "active_mint": primary_mint,
+                "noise_reason": "",
+            }
 
     if trade_like and not token_changes and abs(sol_delta) < Decimal("0.001"):
         return {
@@ -369,6 +742,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "sol_delta": sol_delta,
             "token_changes": token_changes,
             "notify": False,
+            "register_active": False,
             "noise_reason": "No token changes and only tiny SOL fee",
         }
 
@@ -380,44 +754,9 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "hints": hints,
             "sol_delta": sol_delta,
             "token_changes": token_changes,
-            "notify": True,
-            "noise_reason": "",
-        }
-
-    if transfer_hits >= 5:
-        return {
-            "emoji": "💸",
-            "type": "Possible Distribution / Many Transfers",
-            "confidence": "medium",
-            "hints": [f"transfer signals: {transfer_hits}"],
-            "sol_delta": sol_delta,
-            "token_changes": token_changes,
-            "notify": True,
-            "noise_reason": "",
-        }
-
-    if "associated token program" in raw_text or "createassociatedtokenaccount" in raw_text or "createidempotent" in raw_text:
-        return {
-            "emoji": "🧾",
-            "type": "Create Token Account",
-            "confidence": "medium",
-            "hints": ["associated token account activity"],
-            "sol_delta": sol_delta,
-            "token_changes": token_changes,
             "notify": False,
-            "noise_reason": "Token account creation ignored",
-        }
-
-    if transfer_hits > 0 and abs(sol_delta) >= MIN_SOL_DELTA_TO_ALERT:
-        return {
-            "emoji": "↔️",
-            "type": "Large Transfer",
-            "confidence": "medium",
-            "hints": [f"transfer signals: {transfer_hits}"],
-            "sol_delta": sol_delta,
-            "token_changes": token_changes,
-            "notify": True,
-            "noise_reason": "",
+            "register_active": False,
+            "noise_reason": "Trade-like movement ignored unless tracked",
         }
 
     return {
@@ -428,8 +767,51 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
         "sol_delta": sol_delta,
         "token_changes": token_changes,
         "notify": False,
+        "register_active": False,
         "noise_reason": "Low-signal wallet activity ignored",
     }
+
+
+def maybe_register_active_token(
+    label: str,
+    wallet_address: str,
+    signature: str,
+    analysis: dict[str, Any],
+) -> None:
+    if not analysis.get("register_active"):
+        return
+
+    token_changes = analysis.get("token_changes") or []
+    positive_tokens = [x for x in token_changes if x["delta"] > 0]
+
+    if not positive_tokens:
+        return
+
+    token = positive_tokens[0]
+    mint = token.get("mint")
+    amount = token.get("delta") or Decimal("0")
+
+    if not mint:
+        return
+
+    dex_info = fetch_dex_token_info(mint) or {}
+    symbol = dex_info.get("symbol") or TOKEN_ALIASES.get(mint)
+    name = dex_info.get("name")
+    entry_price_usd = dex_info.get("price_usd") or Decimal("0")
+    entry_liquidity_usd = dex_info.get("liquidity_usd") or Decimal("0")
+
+    save_active_token(
+        mint=mint,
+        symbol=symbol,
+        name=name,
+        source_label=label,
+        source_wallet=wallet_address,
+        buy_signature=signature,
+        entry_sol=abs(analysis.get("sol_delta") or Decimal("0")),
+        entry_amount=amount,
+        entry_price_usd=entry_price_usd,
+        entry_liquidity_usd=entry_liquidity_usd,
+    )
 
 
 def _format_token_changes(token_changes: list[dict[str, Any]]) -> list[str]:
@@ -444,12 +826,8 @@ def _format_token_changes(token_changes: list[dict[str, Any]]) -> list[str]:
         post = item["post"]
         sign = "+" if delta > 0 else ""
 
-        lines.append(
-            f"- {_token_label(mint)}: {sign}{_fmt_decimal(delta, 4)}"
-        )
-        lines.append(
-            f"  Balance: {_fmt_decimal(pre, 4)} → {_fmt_decimal(post, 4)}"
-        )
+        lines.append(f"- {_token_label(mint)}: {sign}{_fmt_decimal(delta, 4)}")
+        lines.append(f"  Balance: {_fmt_decimal(pre, 4)} → {_fmt_decimal(post, 4)}")
 
     return lines
 
@@ -479,7 +857,7 @@ def build_wallet_activity_summary(
     primary_mint = _primary_token_mint(token_changes)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V3",
+        f"{analysis['emoji']} Wallet Watch V4",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -491,6 +869,15 @@ def build_wallet_activity_summary(
     ]
 
     lines.extend(_format_token_changes(token_changes))
+
+    if analysis.get("register_active") and primary_mint:
+        lines.extend(
+            [
+                "",
+                "🧠 Active Token Tracker: ON",
+                "This token will be monitored for dump/liquidity risk.",
+            ]
+        )
 
     if primary_mint:
         lines.extend(
@@ -530,6 +917,116 @@ def build_wallet_activity_summary(
     )
 
     return "\n".join(lines)
+
+
+def build_active_token_alert(token: dict[str, Any], dex_info: dict[str, Any], alert_type: str, reason: str) -> str:
+    mint = token["mint"]
+    symbol = dex_info.get("symbol") or token.get("symbol") or TOKEN_ALIASES.get(mint) or _short(mint)
+
+    price = dex_info.get("price_usd") or Decimal("0")
+    liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+    entry_price = _to_decimal(token.get("entry_price_usd"))
+    peak_price = _to_decimal(token.get("peak_price_usd"))
+    entry_liq = _to_decimal(token.get("entry_liquidity_usd"))
+
+    price_from_entry = Decimal("0")
+    price_from_peak = Decimal("0")
+    liquidity_from_entry = Decimal("0")
+
+    if entry_price > 0:
+        price_from_entry = ((price - entry_price) / entry_price) * Decimal("100")
+
+    if peak_price > 0:
+        price_from_peak = ((price - peak_price) / peak_price) * Decimal("100")
+
+    if entry_liq > 0:
+        liquidity_from_entry = ((liquidity - entry_liq) / entry_liq) * Decimal("100")
+
+    return "\n".join(
+        [
+            f"⚠️ Active Token Alert — {alert_type}",
+            "",
+            f"Token: {symbol}",
+            f"Mint: {_short(mint)}",
+            f"Reason: {reason}",
+            "",
+            f"Price: {_fmt_usd(price)}",
+            f"Entry price: {_fmt_usd(entry_price)}",
+            f"Peak price: {_fmt_usd(peak_price)}",
+            f"From entry: {_fmt_decimal(price_from_entry, 2)}%",
+            f"From peak: {_fmt_decimal(price_from_peak, 2)}%",
+            "",
+            f"Liquidity: {_fmt_usd(liquidity)}",
+            f"Entry liquidity: {_fmt_usd(entry_liq)}",
+            f"Liquidity change: {_fmt_decimal(liquidity_from_entry, 2)}%",
+            "",
+            f"Volume 1H: {_fmt_usd(dex_info.get('volume_h1') or Decimal('0'))}",
+            f"1H change: {_fmt_decimal(dex_info.get('price_change_h1') or Decimal('0'), 2)}%",
+            f"1H buys/sells: {dex_info.get('buys_h1') or 0}/{dex_info.get('sells_h1') or 0}",
+            "",
+            "DexScreener:",
+            dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
+            "",
+            "Action: Watch only. No auto entry.",
+        ]
+    )
+
+
+def monitor_active_tokens() -> list[str]:
+    alerts: list[str] = []
+
+    for token in list_active_tokens():
+        mint = token["mint"]
+        dex_info = fetch_dex_token_info(mint)
+
+        if not dex_info:
+            continue
+
+        price = dex_info.get("price_usd") or Decimal("0")
+        liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+
+        entry_price = _to_decimal(token.get("entry_price_usd"))
+        entry_liquidity = _to_decimal(token.get("entry_liquidity_usd"))
+        peak_price = max(_to_decimal(token.get("peak_price_usd")), price)
+        last_alert = token.get("last_alert") or ""
+
+        alert_type = None
+        reason = None
+        new_status = None
+
+        if liquidity <= LIQUIDITY_RUG_USD:
+            alert_type = "LIQUIDITY_RUG"
+            reason = "Liquidity is extremely low."
+            new_status = "DANGER"
+
+        elif entry_liquidity > 0 and liquidity <= entry_liquidity * (Decimal("1") - LIQUIDITY_DROP_ALERT_PCT):
+            alert_type = "LIQUIDITY_DROP"
+            reason = "Liquidity dropped more than 70% from entry."
+
+        elif peak_price > 0 and price <= peak_price * (Decimal("1") - PRICE_DUMP_FROM_PEAK_PCT):
+            alert_type = "PRICE_DUMP_FROM_PEAK"
+            reason = "Price dumped more than 35% from peak."
+
+        elif entry_price > 0 and price <= entry_price * (Decimal("1") - PRICE_DUMP_FROM_ENTRY_PCT):
+            alert_type = "PRICE_DUMP_FROM_ENTRY"
+            reason = "Price dropped more than 25% below entry."
+
+        elif (dex_info.get("sells_h1") or 0) >= 50 and (dex_info.get("sells_h1") or 0) > (dex_info.get("buys_h1") or 0) * 2:
+            alert_type = "SELL_PRESSURE"
+            reason = "1H sells are more than double buys."
+
+        update_active_token_market(
+            mint=mint,
+            price_usd=price,
+            liquidity_usd=liquidity,
+            alert_type=alert_type if alert_type else None,
+            status=new_status,
+        )
+
+        if alert_type and alert_type != last_alert:
+            alerts.append(build_active_token_alert(token, dex_info, alert_type, reason or "Risk detected."))
+
+    return alerts
 
 
 async def run_wallet_watch_cycle(context) -> None:
@@ -597,19 +1094,29 @@ async def run_wallet_watch_cycle(context) -> None:
 
             ignored_count += 1
 
-        if chat_id and important_analysis and important_tx:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=build_wallet_activity_summary(
-                    label=label,
-                    wallet_address=wallet_address,
-                    new_txs=new_txs,
-                    important_tx=important_tx,
-                    analysis=important_analysis,
-                    ignored_count=ignored_count,
-                ),
-                disable_web_page_preview=True,
+        if important_analysis and important_tx:
+            important_signature = important_tx.get("signature") or ""
+
+            maybe_register_active_token(
+                label=label,
+                wallet_address=wallet_address,
+                signature=important_signature,
+                analysis=important_analysis,
             )
+
+            if chat_id:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=build_wallet_activity_summary(
+                        label=label,
+                        wallet_address=wallet_address,
+                        new_txs=new_txs,
+                        important_tx=important_tx,
+                        analysis=important_analysis,
+                        ignored_count=ignored_count,
+                    ),
+                    disable_web_page_preview=True,
+                )
 
         save_wallet_signature(
             wallet_address=wallet_address,
@@ -617,3 +1124,11 @@ async def run_wallet_watch_cycle(context) -> None:
             last_signature=latest_signature,
             last_seen_at=_format_time(latest_block_time),
         )
+
+    if chat_id:
+        for alert in monitor_active_tokens():
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=alert,
+                disable_web_page_preview=True,
+            )
