@@ -94,7 +94,7 @@ async def run_scan_cycle(context):
         _save_token_snapshot(token, total_score, current_signal)
 
         # Send Telegram token alerts only for strong entry candidates.
-        # This removes noisy WATCH / ALERT messages from Telegram.
+        # The alert now includes Age Class + Entry Quality.
         should_send_alert = (
             chat_id
             and current_signal == "ENTRY_CANDIDATE"
@@ -109,7 +109,14 @@ async def run_scan_cycle(context):
                 disable_web_page_preview=True,
             )
 
-        position = maybe_open_paper_trade(token, signal)
+        # Paper trading is now gated inside maybe_open_paper_trade:
+        # it opens only if Entry Quality = ELITE and ENABLE_AUTO_PAPER_ENTRY=true.
+        position = maybe_open_paper_trade(
+            token=token,
+            signal=signal,
+            safety=safety,
+            scores=scores,
+        )
 
         if chat_id and position:
             await context.bot.send_message(
