@@ -17,6 +17,7 @@ def maybe_open_paper_trade(
     signal: dict,
     safety: dict | None = None,
     scores: dict | None = None,
+    security_checks: dict | None = None,
 ) -> dict | None:
     if signal["signal"] != "ENTRY_CANDIDATE":
         return None
@@ -29,9 +30,15 @@ def maybe_open_paper_trade(
 
     entry_quality = calculate_entry_quality(token, safety, scores, signal)
 
-    # Very important:
-    # Paper trading is now allowed only for ELITE setups.
+    # Paper trading is allowed only for ELITE setups.
     if not entry_quality.get("can_paper_trade"):
+        return None
+
+    # Security must pass before any paper auto-entry.
+    if not security_checks:
+        return None
+
+    if security_checks.get("security_status") not in {"PASS", "PARTIAL_PASS"}:
         return None
 
     address = token.get("address")
