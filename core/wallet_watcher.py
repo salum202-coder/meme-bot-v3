@@ -20,6 +20,8 @@ DHT8_MAIN_WALLET = "DHT8LqMZ4UcbgfL2ttXoUUXSnhmV9gNBYJcCZpP3NNY8"
 
 WATCH_WALLETS: dict[str, str] = {
     "DHT8 Main": DHT8_MAIN_WALLET,
+
+    # Main signer / known cluster
     "BJsbr Signer": "BJsbrDPdpxvzP35TYJ7gmrcumqxVSqwDeEb4Gg3aV4Ax",
     "Cluster 3oUE": "3oUEaNt7uL7pjZ6gdiAiEVRp9ZCcGRec7B5aSvXcjbWS",
     "Cluster Fnpc": "Fnpcmk5umHWXKfpjLcTSqVig7tg3aXgW2jF3f4kiGQRU",
@@ -28,6 +30,17 @@ WATCH_WALLETS: dict[str, str] = {
     "Cluster 1imt": "1imt7zeK3mE17dvdfztuEDhfoCUwnK8RVcjRzxnXLba",
     "Cluster AL3r": "AL3riiofreSvSCzoGgkpfLTa4QHe6SDK1NihXXrxZ21C",
     "Cluster Gjct": "GjctEPhWA9ArYKWqGznuhYMzjJKTJCWXbKpdvbYokdDt",
+
+    # New wallets from Solscan activity
+    "Cluster FdwJBf": "FdwJBfk3KXaQEcDcnnamKZX8p4F6SvUqndYpg34q7742",
+    "Cluster 47ry": "47ryXZhowHBseGB4S6kVZAYZTH1wZohzUBsKtDw5xe2Q",
+    "Cluster 4cAg": "4cAgMwv3MGMTNks68f6B8ZR2SRRuEgNeFgAG5pCmQqEF",
+    "Cluster G2H3": "G2H36uTDdp1nn3pmoi4EThNjNVckNXHC61LfYsvDh1cv",
+    "Cluster B6ut": "B6utNA4LPRVsHTX7odHwkjjPwPUr1Qyy1jsYcBWHz637",
+    "Cluster Awao": "Awao8jtzXUWVvm22CPm2tqYLCi3LgBUeCvtYGZS3PAGz",
+    "Cluster Ay2z": "Ay2z9CvwugMV7j3WSLgB9KW83QoV2QP1iFKJmKNsEhPv",
+    "Cluster 7nwP": "7nwPXZNhBj88jcC22VNBQUYLohTsQWh5VGxWqnAAcvMf",
+    "Cluster JD6r": "JD6rVaerbyz6wjQ433nrw6bFTgFrp46MiYmi8EtUAfsG",
 }
 
 TOKEN_ALIASES: dict[str, str] = {
@@ -35,7 +48,11 @@ TOKEN_ALIASES: dict[str, str] = {
 }
 
 MIN_SOL_DELTA_TO_ALERT = Decimal("0.05")
+
+# V4.1 thresholds
 DHT8_BIG_BUY_SOL = Decimal("50")
+CLUSTER_BIG_BUY_SOL = Decimal("10")
+CLUSTER_BIG_SELL_SOL = Decimal("5")
 
 LIQUIDITY_RUG_USD = Decimal("1000")
 LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
@@ -91,21 +108,6 @@ def _format_time(block_time: int | None) -> str:
     if not block_time:
         return "N/A"
     return datetime.fromtimestamp(block_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-
-def _token_label(mint: str | None) -> str:
-    if not mint:
-        return "N/A"
-
-    name = TOKEN_ALIASES.get(mint)
-    if name:
-        return f"{name} ({_short(mint)})"
-
-    active = get_active_token(mint)
-    if active and active.get("symbol"):
-        return f"{active['symbol']} ({_short(mint)})"
-
-    return _short(mint)
 
 
 def _ensure_active_token_table() -> None:
@@ -306,6 +308,21 @@ def is_tracked_token(mint: str | None) -> bool:
 
     active = get_active_token(mint)
     return bool(active and active.get("status") == "ACTIVE")
+
+
+def _token_label(mint: str | None) -> str:
+    if not mint:
+        return "N/A"
+
+    name = TOKEN_ALIASES.get(mint)
+    if name:
+        return f"{name} ({_short(mint)})"
+
+    active = get_active_token(mint)
+    if active and active.get("symbol"):
+        return f"{active['symbol']} ({_short(mint)})"
+
+    return _short(mint)
 
 
 def fetch_dex_token_info(mint: str) -> dict[str, Any] | None:
@@ -583,17 +600,30 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
     trade_like = bool(hints)
     transfer_hits = raw_text.count('"transfer"') + logs_text.count("instruction: transfer")
 
+    # BUY:
+    # DHT8 needs 50 SOL+
+    # Any other cluster wallet needs 10 SOL+
+    # Tracked tokens still notify even if below threshold.
     if positive_tokens and sol_delta < Decimal("-0.001"):
         spent_sol = abs(sol_delta)
         primary_mint = positive_tokens[0].get("mint")
-        is_big_dht8_buy = wallet_address == DHT8_MAIN_WALLET and spent_sol >= DHT8_BIG_BUY_SOL
 
-        if is_big_dht8_buy:
+        is_dht8_big_buy = (
+            wallet_address == DHT8_MAIN_WALLET
+            and spent_sol >= DHT8_BIG_BUY_SOL
+        )
+
+        is_cluster_big_buy = (
+            wallet_address != DHT8_MAIN_WALLET
+            and spent_sol >= CLUSTER_BIG_BUY_SOL
+        )
+
+        if is_dht8_big_buy:
             return {
                 "emoji": "🟢",
                 "type": "DHT8 Big BUY",
                 "confidence": "high",
-                "hints": hints or ["token received, SOL spent"],
+                "hints": hints or ["DHT8 spent big SOL and received token"],
                 "sol_delta": sol_delta,
                 "token_changes": token_changes,
                 "notify": True,
@@ -602,7 +632,20 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
                 "noise_reason": "",
             }
 
-        # Reduce noise: only notify non-DHT8 buys if the token is already tracked.
+        if is_cluster_big_buy:
+            return {
+                "emoji": "🟢",
+                "type": "Cluster Big BUY",
+                "confidence": "high",
+                "hints": hints or ["cluster wallet spent SOL and received token"],
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": True,
+                "active_mint": primary_mint,
+                "noise_reason": "",
+            }
+
         if is_tracked_token(primary_mint):
             return {
                 "emoji": "🟢",
@@ -626,16 +669,19 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "token_changes": token_changes,
             "notify": False,
             "register_active": False,
-            "noise_reason": "Buy was not DHT8 Big BUY and token is not tracked",
+            "noise_reason": "Buy was below cluster threshold and token is not tracked",
         }
 
+    # SELL:
+    # Notify if tracked token OR any cluster wallet receives 5 SOL+ from selling/spending token.
     if negative_tokens and sol_delta > Decimal("0.001"):
         primary_mint = negative_tokens[0].get("mint")
+        is_big_cluster_sell = sol_delta >= CLUSTER_BIG_SELL_SOL
 
-        if is_tracked_token(primary_mint) or sol_delta >= DHT8_BIG_BUY_SOL:
+        if is_tracked_token(primary_mint) or is_big_cluster_sell:
             return {
                 "emoji": "🔴",
-                "type": "Possible SELL / Tracked Token Exit",
+                "type": "Cluster SELL / Tracked Token Exit",
                 "confidence": "medium-high",
                 "hints": hints or ["token spent, SOL received"],
                 "sol_delta": sol_delta,
@@ -648,16 +694,18 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
 
         return {
             "emoji": "🔴",
-            "type": "Untracked SELL ignored",
+            "type": "Small / untracked SELL ignored",
             "confidence": "low",
             "hints": hints or ["untracked sell"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
             "notify": False,
             "register_active": False,
-            "noise_reason": "Sell was for untracked token",
+            "noise_reason": "Sell was below cluster threshold and token is not tracked",
         }
 
+    # Transfer OUT:
+    # Only notify if token is tracked/active.
     if negative_tokens and abs(sol_delta) < Decimal("0.05"):
         primary_mint = negative_tokens[0].get("mint")
 
@@ -679,7 +727,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "emoji": "🟠",
             "type": "Untracked Transfer OUT ignored",
             "confidence": "low",
-            "hints": hints or [f"untracked token balance decreased"],
+            "hints": hints or ["untracked token balance decreased"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
             "notify": False,
@@ -687,6 +735,8 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "noise_reason": "Transfer OUT was for untracked token",
         }
 
+    # Transfer IN:
+    # Only notify if token is tracked/active.
     if positive_tokens and abs(sol_delta) < Decimal("0.05"):
         primary_mint = positive_tokens[0].get("mint")
 
@@ -708,7 +758,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "emoji": "📥",
             "type": "Untracked Transfer IN ignored",
             "confidence": "low",
-            "hints": hints or [f"untracked token balance increased"],
+            "hints": hints or ["untracked token balance increased"],
             "sol_delta": sol_delta,
             "token_changes": token_changes,
             "notify": False,
@@ -756,7 +806,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "token_changes": token_changes,
             "notify": False,
             "register_active": False,
-            "noise_reason": "Trade-like movement ignored unless tracked",
+            "noise_reason": "Trade-like movement ignored unless tracked or above Big BUY/SELL threshold",
         }
 
     return {
@@ -857,7 +907,7 @@ def build_wallet_activity_summary(
     primary_mint = _primary_token_mint(token_changes)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4",
+        f"{analysis['emoji']} Wallet Watch V4.1",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
