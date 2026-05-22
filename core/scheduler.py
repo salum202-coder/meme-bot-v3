@@ -16,6 +16,7 @@ from core.filters import apply_initial_filters
 from core.safety import evaluate_safety
 from core.scoring import calculate_scores
 from core.signals import classify_signal
+from core.security_filters import evaluate_token_security
 from core.notifier import build_token_alert, build_position_open_alert
 from core.paper_trader import maybe_open_paper_trade
 from core.position_manager import evaluate_positions
@@ -90,11 +91,15 @@ async def run_scan_cycle(context):
         current_signal = signal["signal"]
         total_score = scores["total_score"]
 
+        security_checks = None
+
+        # Run security checks only for serious candidates to avoid too many RPC calls.
+        if current_signal == "ENTRY_CANDIDATE":
+            security_checks = evaluate_token_security(http, token)
+
         save_discovered_token(token, current_signal, total_score)
         _save_token_snapshot(token, total_score, current_signal)
 
-        # Send Telegram token alerts only for strong entry candidates.
-        # The alert now includes Age Class + Entry Quality.
         should_send_alert = (
             chat_id
             and current_signal == "ENTRY_CANDIDATE"
@@ -105,17 +110,26 @@ async def run_scan_cycle(context):
         if should_send_alert:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=build_token_alert(token, safety, scores, signal),
+                text=build_token_alert(
+                    token=token,
+                    safety=safety,
+                    scores=scores,
+                    signal=signal,
+                    security_checks=security_checks,
+                ),
                 disable_web_page_preview=True,
             )
 
-        # Paper trading is now gated inside maybe_open_paper_trade:
-        # it opens only if Entry Quality = ELITE and ENABLE_AUTO_PAPER_ENTRY=true.
+        # Paper trading is now gated by:
+        # ENABLE_AUTO_PAPER_ENTRY=true
+        # Entry Quality = ELITE
+        # Security = PASS or PARTIAL_PASS
         position = maybe_open_paper_trade(
             token=token,
             signal=signal,
             safety=safety,
             scores=scores,
+            security_checks=security_checks,
         )
 
         if chat_id and position:
