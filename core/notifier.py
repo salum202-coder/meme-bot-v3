@@ -28,7 +28,24 @@ def _quality_note(entry_quality: dict) -> str:
     return reasons[0]
 
 
-def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> str:
+def _security_note(security_checks: dict | None) -> str:
+    if not security_checks:
+        return "N/A"
+
+    notes = security_checks.get("notes") or []
+    if not notes:
+        return "N/A"
+
+    return notes[0]
+
+
+def build_token_alert(
+    token: dict,
+    safety: dict,
+    scores: dict,
+    signal: dict,
+    security_checks: dict | None = None,
+) -> str:
     symbol = token.get("symbol", "UNKNOWN")
     address = token.get("address", "")
     risk = safety.get("risk_level", "unknown")
@@ -42,6 +59,21 @@ def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> 
     buy_sell_ratio = entry_quality.get("buy_sell_ratio", 0)
     volume_liquidity_ratio = entry_quality.get("volume_liquidity_ratio", 0)
     quality_note = _quality_note(entry_quality)
+
+    security_status = "NOT_CHECKED"
+    security_score = "N/A"
+    mint_authority = "N/A"
+    freeze_authority = "N/A"
+    lp_status = "NOT_CHECKED"
+    security_note = "N/A"
+
+    if security_checks:
+        security_status = security_checks.get("security_status", "UNKNOWN")
+        security_score = security_checks.get("security_score", "N/A")
+        mint_authority = security_checks.get("mint_authority", "UNKNOWN")
+        freeze_authority = security_checks.get("freeze_authority", "UNKNOWN")
+        lp_status = security_checks.get("lp_status", "NOT_CHECKED")
+        security_note = _security_note(security_checks)
 
     dex_url = token.get(
         "dex_url",
@@ -57,6 +89,12 @@ def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> 
         f"🚨 Signal: {signal['signal']}\n"
         f"🧠 Reason: {reason}\n"
         f"📝 Quality Note: {quality_note}\n\n"
+        f"🔐 Security: {security_status}\n"
+        f"🧮 Security Score: {security_score}/100\n"
+        f"🪙 Mint Authority: {mint_authority}\n"
+        f"🧊 Freeze Authority: {freeze_authority}\n"
+        f"🔥 LP Status: {lp_status}\n"
+        f"📝 Security Note: {security_note}\n\n"
         f"📊 Total Score: {scores['total_score']}/100\n"
         f"🛡️ Safety: {scores['safety_score']}/40\n"
         f"🔥 Momentum: {scores['momentum_score']}/30\n"
@@ -92,7 +130,7 @@ def build_position_open_alert(position: dict) -> str:
     dex_url = f"https://dexscreener.com/solana/{address}"
 
     return (
-        f"🟢 Paper Trade Opened — ELITE ONLY\n\n"
+        f"🟢 Paper Trade Opened — ELITE + SECURITY\n\n"
         f"🪙 Token: {symbol}\n"
         f"💵 Capital: ${capital:.2f}\n\n"
         f"🎯 Entry: ${entry:.8f}\n"
