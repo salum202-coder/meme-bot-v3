@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+
 from config import settings
+from core.entry_quality import calculate_entry_quality
 from storage.repository_positions import (
     count_open_positions,
     open_position,
@@ -10,22 +12,37 @@ from storage.repository_positions import (
 from storage.repository_trades import has_traded_token
 
 
-def maybe_open_paper_trade(token: dict, signal: dict) -> dict | None:
+def maybe_open_paper_trade(
+    token: dict,
+    signal: dict,
+    safety: dict | None = None,
+    scores: dict | None = None,
+) -> dict | None:
     if signal["signal"] != "ENTRY_CANDIDATE":
         return None
 
     if not settings.enable_auto_paper_entry:
         return None
 
+    if safety is None or scores is None:
+        return None
+
+    entry_quality = calculate_entry_quality(token, safety, scores, signal)
+
+    # Very important:
+    # Paper trading is now allowed only for ELITE setups.
+    if not entry_quality.get("can_paper_trade"):
+        return None
+
     address = token.get("address")
     if not address:
         return None
 
-    # Prevent duplicate open position on the same token
+    # Prevent duplicate open position on the same token.
     if has_open_position(address):
         return None
 
-    # Prevent trading the same token again after a closed paper trade
+    # Prevent trading the same token again after a closed paper trade.
     if has_traded_token(address):
         return None
 
