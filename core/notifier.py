@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
+from core.entry_quality import calculate_entry_quality
 from utils.formatters import fmt_money, fmt_pct
 
 
@@ -14,42 +13,19 @@ def escape_md(text: str) -> str:
     return text
 
 
-def format_token_age(pair_created_at) -> str:
-    if not pair_created_at:
-        return "N/A"
-
+def _format_ratio(value: float) -> str:
     try:
-        timestamp = float(pair_created_at)
-
-        # DexScreener usually returns milliseconds.
-        if timestamp > 10_000_000_000:
-            timestamp = timestamp / 1000
-
-        created_at = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-        now = datetime.now(timezone.utc)
-
-        age_seconds = max(0, int((now - created_at).total_seconds()))
-        age_minutes = age_seconds // 60
-
-        if age_minutes < 1:
-            return "<1m"
-
-        if age_minutes < 60:
-            return f"{age_minutes}m"
-
-        age_hours = age_minutes // 60
-        remaining_minutes = age_minutes % 60
-
-        if age_hours < 24:
-            return f"{age_hours}h {remaining_minutes}m"
-
-        age_days = age_hours // 24
-        remaining_hours = age_hours % 24
-
-        return f"{age_days}d {remaining_hours}h"
-
+        return f"{float(value):.2f}x"
     except Exception:
         return "N/A"
+
+
+def _quality_note(entry_quality: dict) -> str:
+    reasons = entry_quality.get("reasons") or []
+    if not reasons:
+        return "N/A"
+
+    return reasons[0]
 
 
 def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> str:
@@ -57,7 +33,15 @@ def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> 
     address = token.get("address", "")
     risk = safety.get("risk_level", "unknown")
     reason = signal.get("reason", "")
-    token_age = format_token_age(token.get("pair_created_at"))
+
+    entry_quality = calculate_entry_quality(token, safety, scores, signal)
+
+    age_text = entry_quality.get("age_text", "N/A")
+    age_class = entry_quality.get("age_class", "UNKNOWN")
+    quality = entry_quality.get("quality", "UNKNOWN")
+    buy_sell_ratio = entry_quality.get("buy_sell_ratio", 0)
+    volume_liquidity_ratio = entry_quality.get("volume_liquidity_ratio", 0)
+    quality_note = _quality_note(entry_quality)
 
     dex_url = token.get(
         "dex_url",
@@ -67,9 +51,12 @@ def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> 
     return (
         f"🎯 Meme Radar V3\n\n"
         f"🪙 Token: {symbol}\n"
-        f"⏱️ Age: {token_age}\n"
+        f"⏱️ Age: {age_text}\n"
+        f"🕒 Age Class: {age_class}\n"
+        f"🎯 Entry Quality: {quality}\n"
         f"🚨 Signal: {signal['signal']}\n"
-        f"🧠 Reason: {reason}\n\n"
+        f"🧠 Reason: {reason}\n"
+        f"📝 Quality Note: {quality_note}\n\n"
         f"📊 Total Score: {scores['total_score']}/100\n"
         f"🛡️ Safety: {scores['safety_score']}/40\n"
         f"🔥 Momentum: {scores['momentum_score']}/30\n"
@@ -80,6 +67,8 @@ def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> 
         f"📈 Volume 1H: {fmt_money(token.get('volume_1h'))}\n"
         f"📉 Price Change 1H: {fmt_pct(token.get('price_change_1h'))}\n"
         f"🛒 Buys/Sells: {token.get('buys_1h', 0)}/{token.get('sells_1h', 0)}\n"
+        f"⚖️ Buy/Sell Ratio: {_format_ratio(buy_sell_ratio)}\n"
+        f"🌊 Vol/Liq Ratio: {_format_ratio(volume_liquidity_ratio)}\n"
         f"⚠️ Risk: {risk}\n\n"
         f"📋 Contract Address:\n"
         f"{address}\n\n"
@@ -103,7 +92,7 @@ def build_position_open_alert(position: dict) -> str:
     dex_url = f"https://dexscreener.com/solana/{address}"
 
     return (
-        f"🟢 Paper Trade Opened\n\n"
+        f"🟢 Paper Trade Opened — ELITE ONLY\n\n"
         f"🪙 Token: {symbol}\n"
         f"💵 Capital: ${capital:.2f}\n\n"
         f"🎯 Entry: ${entry:.8f}\n"
