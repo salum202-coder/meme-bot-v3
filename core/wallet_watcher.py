@@ -54,6 +54,11 @@ DHT8_BIG_BUY_SOL = Decimal("20")
 CLUSTER_BIG_BUY_SOL = Decimal("5")
 CLUSTER_BIG_SELL_SOL = Decimal("3")
 
+# Temporary investigation mode for DHT8.
+# Keep it ON for 24 hours only, then change it back to False.
+DHT8_TRACE_ALL = True
+DHT8_TRACE_MAX_TXS_PER_CYCLE = 10
+
 LIQUIDITY_RUG_USD = Decimal("1000")
 LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
@@ -531,6 +536,43 @@ def _primary_token_mint(token_changes: list[dict[str, Any]]) -> str | None:
     return token_changes[0].get("mint")
 
 
+def _get_signers(details: dict[str, Any]) -> list[str]:
+    message = ((details.get("transaction") or {}).get("message") or {})
+    account_keys = message.get("accountKeys") or []
+
+    signers: list[str] = []
+
+    for item in account_keys:
+        if isinstance(item, dict):
+            pubkey = item.get("pubkey")
+            is_signer = bool(item.get("signer"))
+
+            if pubkey and is_signer:
+                signers.append(pubkey)
+
+    return signers
+
+
+def _wallet_role_in_tx(details: dict[str, Any], wallet_address: str) -> str:
+    signers = _get_signers(details)
+
+    if wallet_address in signers:
+        return "SIGNER — DHT8 executed this transaction"
+
+    account_keys = _get_account_keys(details)
+    if wallet_address in account_keys:
+        return "AFFECTED — DHT8 is inside the transaction, but not signer"
+
+    meta = details.get("meta") or {}
+    token_balances = (meta.get("preTokenBalances") or []) + (meta.get("postTokenBalances") or [])
+
+    for item in token_balances:
+        if item.get("owner") == wallet_address:
+            return "TOKEN_OWNER — DHT8 token balance was affected"
+
+    return "UNKNOWN — DHT8 relation not clear"
+
+
 def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
     details = fetch_transaction_details(signature)
 
@@ -601,8 +643,8 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
     transfer_hits = raw_text.count('"transfer"') + logs_text.count("instruction: transfer")
 
     # BUY:
-    # DHT8 needs 50 SOL+
-    # Any other cluster wallet needs 10 SOL+
+    # DHT8 needs 20 SOL+
+    # Any other cluster wallet needs 5 SOL+
     # Tracked tokens still notify even if below threshold.
     if positive_tokens and sol_delta < Decimal("-0.001"):
         spent_sol = abs(sol_delta)
@@ -673,7 +715,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
         }
 
     # SELL:
-    # Notify if tracked token OR any cluster wallet receives 5 SOL+ from selling/spending token.
+    # Notify if tracked token OR any cluster wallet receives 3 SOL+ from selling/spending token.
     if negative_tokens and sol_delta > Decimal("0.001"):
         primary_mint = negative_tokens[0].get("mint")
         is_big_cluster_sell = sol_delta >= CLUSTER_BIG_SELL_SOL
@@ -969,6 +1011,74 @@ def build_wallet_activity_summary(
     return "\n".join(lines)
 
 
+def build_dht8_trace_message(
+    tx: dict[str, Any],
+    analysis: dict[str, Any],
+    wallet_address: str,
+) -> str:
+    signature = tx.get("signature") or ""
+    details = fetch_transaction_details(signature)
+
+    role = "UNKNOWN"
+    signers_text = "N/A"
+
+    if details:
+        role = _wallet_role_in_tx(details, wallet_address)
+        signers = _get_signers(details)
+        signers_text = ", ".join(_short(s) for s in signers[:5]) if signers else "N/A"
+
+    sol_delta = analysis.get("sol_delta", Decimal("0"))
+    sol_sign = "+" if sol_delta > 0 else ""
+
+    hints = analysis.get("hints") or []
+    hints_text = ", ".join(hints[:6]) if hints else "N/A"
+
+    noise_reason = analysis.get("noise_reason") or "N/A"
+    token_changes = analysis.get("token_changes") or []
+
+    lines = [
+        "🕵️ DHT8 Full Trace",
+        "",
+        f"Wallet: {_short(wallet_address)}",
+        f"Role: {role}",
+        f"Signers: {signers_text}",
+        "",
+        f"Detected: {analysis.get('type', 'Unknown')}",
+        f"Confidence: {analysis.get('confidence', 'N/A')}",
+        f"Hints: {hints_text}",
+        f"Noise reason: {noise_reason}",
+        "",
+        f"SOL delta: {sol_sign}{_fmt_decimal(sol_delta, 6)} SOL",
+        "",
+    ]
+
+    lines.extend(_format_token_changes(token_changes))
+
+    primary_mint = _primary_token_mint(token_changes)
+    if primary_mint:
+        lines.extend(
+            [
+                "",
+                "DexScreener:",
+                f"https://dexscreener.com/solana/{primary_mint}",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            f"Time: {_format_time(tx.get('blockTime'))}",
+            "",
+            "Tx:",
+            f"https://solscan.io/tx/{signature}",
+            "",
+            "Action: Trace only. No auto entry.",
+        ]
+    )
+
+    return "\n".join(lines)
+
+
 def build_active_token_alert(token: dict[str, Any], dex_info: dict[str, Any], alert_type: str, reason: str) -> str:
     mint = token["mint"]
     symbol = dex_info.get("symbol") or token.get("symbol") or TOKEN_ALIASES.get(mint) or _short(mint)
@@ -1099,6 +1209,7 @@ async def run_wallet_watch_cycle(context) -> None:
 
         last_seen = get_last_signature(wallet_address)
 
+        # First initialization only. Do not send old historical txs.
         if not last_seen:
             save_wallet_signature(
                 wallet_address=wallet_address,
@@ -1124,6 +1235,59 @@ async def run_wallet_watch_cycle(context) -> None:
             new_txs = signatures[:known_index]
 
         new_txs = new_txs[:10]
+
+        # Special DHT8 investigation mode:
+        # Send every new DHT8 tx, even if normal V4.1 filter would ignore it.
+        if wallet_address == DHT8_MAIN_WALLET and DHT8_TRACE_ALL:
+            txs_to_trace = new_txs[:DHT8_TRACE_MAX_TXS_PER_CYCLE]
+
+            for tx in txs_to_trace:
+                signature = tx.get("signature") or ""
+                if not signature:
+                    continue
+
+                analysis = analyze_transaction(signature, wallet_address)
+
+                if analysis.get("notify"):
+                    maybe_register_active_token(
+                        label=label,
+                        wallet_address=wallet_address,
+                        signature=signature,
+                        analysis=analysis,
+                    )
+
+                    if chat_id:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=build_wallet_activity_summary(
+                                label=label,
+                                wallet_address=wallet_address,
+                                new_txs=[tx],
+                                important_tx=tx,
+                                analysis=analysis,
+                                ignored_count=0,
+                            ),
+                            disable_web_page_preview=True,
+                        )
+                else:
+                    if chat_id:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=build_dht8_trace_message(
+                                tx=tx,
+                                analysis=analysis,
+                                wallet_address=wallet_address,
+                            ),
+                            disable_web_page_preview=True,
+                        )
+
+            save_wallet_signature(
+                wallet_address=wallet_address,
+                label=label,
+                last_signature=latest_signature,
+                last_seen_at=_format_time(latest_block_time),
+            )
+            continue
 
         important_analysis = None
         important_tx = None
