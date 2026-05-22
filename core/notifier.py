@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from utils.formatters import fmt_money, fmt_pct
 
 
@@ -12,11 +14,50 @@ def escape_md(text: str) -> str:
     return text
 
 
+def format_token_age(pair_created_at) -> str:
+    if not pair_created_at:
+        return "N/A"
+
+    try:
+        timestamp = float(pair_created_at)
+
+        # DexScreener usually returns milliseconds.
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000
+
+        created_at = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        age_seconds = max(0, int((now - created_at).total_seconds()))
+        age_minutes = age_seconds // 60
+
+        if age_minutes < 1:
+            return "<1m"
+
+        if age_minutes < 60:
+            return f"{age_minutes}m"
+
+        age_hours = age_minutes // 60
+        remaining_minutes = age_minutes % 60
+
+        if age_hours < 24:
+            return f"{age_hours}h {remaining_minutes}m"
+
+        age_days = age_hours // 24
+        remaining_hours = age_hours % 24
+
+        return f"{age_days}d {remaining_hours}h"
+
+    except Exception:
+        return "N/A"
+
+
 def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> str:
     symbol = token.get("symbol", "UNKNOWN")
     address = token.get("address", "")
     risk = safety.get("risk_level", "unknown")
     reason = signal.get("reason", "")
+    token_age = format_token_age(token.get("pair_created_at"))
 
     dex_url = token.get(
         "dex_url",
@@ -26,6 +67,7 @@ def build_token_alert(token: dict, safety: dict, scores: dict, signal: dict) -> 
     return (
         f"🎯 Meme Radar V3\n\n"
         f"🪙 Token: {symbol}\n"
+        f"⏱️ Age: {token_age}\n"
         f"🚨 Signal: {signal['signal']}\n"
         f"🧠 Reason: {reason}\n\n"
         f"📊 Total Score: {scores['total_score']}/100\n"
