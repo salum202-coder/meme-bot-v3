@@ -50,9 +50,9 @@ TOKEN_ALIASES: dict[str, str] = {
 MIN_SOL_DELTA_TO_ALERT = Decimal("0.05")
 
 # V4.1 thresholds
-DHT8_BIG_BUY_SOL = Decimal("50")
-CLUSTER_BIG_BUY_SOL = Decimal("10")
-CLUSTER_BIG_SELL_SOL = Decimal("5")
+DHT8_BIG_BUY_SOL = Decimal("20")
+CLUSTER_BIG_BUY_SOL = Decimal("5")
+CLUSTER_BIG_SELL_SOL = Decimal("3")
 
 LIQUIDITY_RUG_USD = Decimal("1000")
 LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
