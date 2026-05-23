@@ -30,7 +30,8 @@ WATCH_WALLETS: dict[str, str] = {
     "Cluster 1imt": "1imt7zeK3mE17dvdfztuEDhfoCUwnK8RVcjRzxnXLba",
     "Cluster AL3r": "AL3riiofreSvSCzoGgkpfLTa4QHe6SDK1NihXXrxZ21C",
     "Cluster Gjct": "GjctEPhWA9ArYKWqGznuhYMzjJKTJCWXbKpdvbYokdDt",
-
+    "Cluster Gjct": "973vghafz4fQYB3MquWdLZd8dBMzJWcsTyBxH2GAMqcY",
+   
     # New wallets from Solscan activity
     "Cluster FdwJBf": "FdwJBfk3KXaQEcDcnnamKZX8p4F6SvUqndYpg34q7742",
     "Cluster 47ry": "47ryXZhowHBseGB4S6kVZAYZTH1wZohzUBsKtDw5xe2Q",
