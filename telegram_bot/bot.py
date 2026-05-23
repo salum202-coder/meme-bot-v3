@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
+
 from config import settings
 from telegram_bot.handlers_start import start_handler
 from telegram_bot.handlers_status import status_handler
@@ -8,9 +15,12 @@ from telegram_bot.handlers_wallet import wallet_handler
 from telegram_bot.handlers_positions import positions_handler
 from telegram_bot.handlers_trades import trades_handler
 from telegram_bot.handlers_wallet_watch import cluster_handler
+from telegram_bot.handlers_digest import digest_handler
+from telegram_bot.handlers_menu import menu_handler
 from telegram_bot.callbacks import generic_callback_handler
 from core.scheduler import run_scan_cycle, run_position_cycle
 from core.wallet_watcher import run_wallet_watch_cycle
+from core.wallet_digest import run_wallet_digest_cycle
 
 
 def build_bot_application():
@@ -24,7 +34,11 @@ def build_bot_application():
     app.add_handler(CommandHandler("trades", trades_handler))
     app.add_handler(CommandHandler("cluster", cluster_handler))
     app.add_handler(CommandHandler("watch_wallets", cluster_handler))
+    app.add_handler(CommandHandler("digest", digest_handler))
     app.add_handler(CallbackQueryHandler(generic_callback_handler))
+
+    # Fixed Telegram control panel buttons.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
 
     if app.job_queue is None:
         raise RuntimeError("Job queue is not available. Install PTB with job-queue extras if needed.")
@@ -32,7 +46,10 @@ def build_bot_application():
     app.job_queue.run_repeating(run_scan_cycle, interval=settings.scan_interval_seconds, first=5)
     app.job_queue.run_repeating(run_position_cycle, interval=settings.position_check_interval_seconds, first=15)
 
-    # Wallet Watch V1 - alerts only, no paper/live entries.
+    # Wallet Watch - important alerts.
     app.job_queue.run_repeating(run_wallet_watch_cycle, interval=300, first=25)
+
+    # Wallet Cluster Digest - summary report every 30 minutes.
+    app.job_queue.run_repeating(run_wallet_digest_cycle, interval=1800, first=180)
 
     return app
