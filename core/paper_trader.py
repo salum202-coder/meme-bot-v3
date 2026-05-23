@@ -18,6 +18,7 @@ def maybe_open_paper_trade(
     safety: dict | None = None,
     scores: dict | None = None,
     security_checks: dict | None = None,
+    raydium_info: dict | None = None,
 ) -> dict | None:
     if signal["signal"] != "ENTRY_CANDIDATE":
         return None
@@ -39,6 +40,16 @@ def maybe_open_paper_trade(
         return None
 
     if security_checks.get("security_status") not in {"PASS", "PARTIAL_PASS"}:
+        return None
+
+    # Raydium must confirm quality before any paper auto-entry.
+    if not raydium_info:
+        return None
+
+    if not raydium_info.get("is_raydium"):
+        return None
+
+    if raydium_info.get("raydium_quality") != "GOOD":
         return None
 
     address = token.get("address")
