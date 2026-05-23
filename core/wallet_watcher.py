@@ -41,10 +41,14 @@ WATCH_WALLETS: dict[str, str] = {
     "Cluster Ay2z": "Ay2z9CvwugMV7j3WSLgB9KW83QoV2QP1iFKJmKNsEhPv",
     "Cluster 7nwP": "7nwPXZNhBj88jcC22VNBQUYLohTsQWh5VGxWqnAAcvMf",
     "Cluster JD6r": "JD6rVaerbyz6wjQ433nrw6bFTgFrp46MiYmi8EtUAfsG",
+
+    # Newly confirmed SPCX buyer / signer
+    "Cluster 2usC": "2usC51yJqENTS6U4bo19AmDspRF9UizrmkMQrB3Pxno3",
 }
 
 TOKEN_ALIASES: dict[str, str] = {
     "D6uqF8hPTP62yN3M2NhJUn8NPR9zTcyQS5pFE2QKfXnm": "SpaceX",
+    "21EsdVV4apT8dK9UtcuBZGNUS2P7PikL5iBf2SVYGSqg": "SPCX",
 }
 
 MIN_SOL_DELTA_TO_ALERT = Decimal("0.05")
@@ -642,10 +646,6 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
     trade_like = bool(hints)
     transfer_hits = raw_text.count('"transfer"') + logs_text.count("instruction: transfer")
 
-    # BUY:
-    # DHT8 needs 20 SOL+
-    # Any other cluster wallet needs 5 SOL+
-    # Tracked tokens still notify even if below threshold.
     if positive_tokens and sol_delta < Decimal("-0.001"):
         spent_sol = abs(sol_delta)
         primary_mint = positive_tokens[0].get("mint")
@@ -714,8 +714,6 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "noise_reason": "Buy was below cluster threshold and token is not tracked",
         }
 
-    # SELL:
-    # Notify if tracked token OR any cluster wallet receives 3 SOL+ from selling/spending token.
     if negative_tokens and sol_delta > Decimal("0.001"):
         primary_mint = negative_tokens[0].get("mint")
         is_big_cluster_sell = sol_delta >= CLUSTER_BIG_SELL_SOL
@@ -746,8 +744,6 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "noise_reason": "Sell was below cluster threshold and token is not tracked",
         }
 
-    # Transfer OUT:
-    # Only notify if token is tracked/active.
     if negative_tokens and abs(sol_delta) < Decimal("0.05"):
         primary_mint = negative_tokens[0].get("mint")
 
@@ -777,8 +773,6 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "noise_reason": "Transfer OUT was for untracked token",
         }
 
-    # Transfer IN:
-    # Only notify if token is tracked/active.
     if positive_tokens and abs(sol_delta) < Decimal("0.05"):
         primary_mint = positive_tokens[0].get("mint")
 
@@ -1209,7 +1203,6 @@ async def run_wallet_watch_cycle(context) -> None:
 
         last_seen = get_last_signature(wallet_address)
 
-        # First initialization only. Do not send old historical txs.
         if not last_seen:
             save_wallet_signature(
                 wallet_address=wallet_address,
@@ -1236,8 +1229,6 @@ async def run_wallet_watch_cycle(context) -> None:
 
         new_txs = new_txs[:10]
 
-        # Special DHT8 investigation mode:
-        # Send every new DHT8 tx, even if normal V4.1 filter would ignore it.
         if wallet_address == DHT8_MAIN_WALLET and DHT8_TRACE_ALL:
             txs_to_trace = new_txs[:DHT8_TRACE_MAX_TXS_PER_CYCLE]
 
