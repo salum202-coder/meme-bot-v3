@@ -17,6 +17,7 @@ from core.safety import evaluate_safety
 from core.scoring import calculate_scores
 from core.signals import classify_signal
 from core.security_filters import evaluate_token_security
+from core.raydium_intelligence import evaluate_raydium_intelligence
 from core.notifier import build_token_alert, build_position_open_alert
 from core.paper_trader import maybe_open_paper_trade
 from core.position_manager import evaluate_positions
@@ -92,10 +93,12 @@ async def run_scan_cycle(context):
         total_score = scores["total_score"]
 
         security_checks = None
+        raydium_info = None
 
-        # Run security checks only for serious candidates to avoid too many RPC calls.
+        # Run heavier checks only for serious candidates to avoid too many API/RPC calls.
         if current_signal == "ENTRY_CANDIDATE":
             security_checks = evaluate_token_security(http, token)
+            raydium_info = evaluate_raydium_intelligence(http, token)
 
         save_discovered_token(token, current_signal, total_score)
         _save_token_snapshot(token, total_score, current_signal)
@@ -116,6 +119,7 @@ async def run_scan_cycle(context):
                     scores=scores,
                     signal=signal,
                     security_checks=security_checks,
+                    raydium_info=raydium_info,
                 ),
                 disable_web_page_preview=True,
             )
@@ -124,12 +128,14 @@ async def run_scan_cycle(context):
         # ENABLE_AUTO_PAPER_ENTRY=true
         # Entry Quality = ELITE
         # Security = PASS or PARTIAL_PASS
+        # Raydium Quality = GOOD
         position = maybe_open_paper_trade(
             token=token,
             signal=signal,
             safety=safety,
             scores=scores,
             security_checks=security_checks,
+            raydium_info=raydium_info,
         )
 
         if chat_id and position:
