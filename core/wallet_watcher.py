@@ -46,6 +46,7 @@ WATCH_WALLETS: dict[str, str] = {
     # Confirmed active wallets from SPCX / related activity
     "Cluster 2usC": "2usC51yJqENTS6U4bo19AmDspRF9UizrmkMQrB3Pxno3",
     "Cluster GAMq": "973vghafz4fQYB3MquWdLZd8dBMzJWcsTyBxH2GAMqcY",
+    "Cluster G8R7 Buyer Distributor": "G8R73oApukNBHynSnmXWamhJuc1WWr7tBUAnra9wMdTt",
 }
 
 TOKEN_ALIASES: dict[str, str] = {
