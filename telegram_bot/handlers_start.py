@@ -1,7 +1,19 @@
 from __future__ import annotations
 
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
+
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["📊 Status", "🧾 30m Digest"],
+        ["🕵️ Cluster", "📈 Trades"],
+        ["📌 Positions", "💼 Wallet"],
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False,
+    is_persistent=True,
+)
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -10,13 +22,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context.application.bot_data["default_chat_id"] = chat_id
 
     text = (
-        "✅ Meme Bot V3 Starter is live.\n"
-        "📡 Auto alerts are enabled.\n\n"
-        "Commands:\n"
+        "✅ Meme Bot V3 is live.\n"
+        "📡 Auto alerts are enabled.\n"
+        "🧾 Wallet digest runs every 30 minutes.\n\n"
+        "Use the fixed control panel below, or commands:\n"
         "/status - Bot status and performance\n"
+        "/cluster - Wallet cluster watch\n"
+        "/digest - Last 30m wallet digest\n"
         "/positions - Open paper trades\n"
         "/trades - Last closed trades\n"
         "/wallet - Paper wallet summary"
     )
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
