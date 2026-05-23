@@ -52,15 +52,32 @@ TOKEN_ALIASES: dict[str, str] = {
     "21EsdVV4apT8dK9UtcuBZGNUS2P7PikL5iBf2SVYGSqg": "SPCX",
 }
 
+# Token family detector.
+# Important: SPCX / SpaceX may keep the same name but use a new mint every time.
+TOKEN_FAMILY_KEYWORDS: dict[str, list[str]] = {
+    "SPCX / SpaceX Family": [
+        "spcx",
+        "spacex",
+        "space x",
+    ],
+}
+
 MIN_SOL_DELTA_TO_ALERT = Decimal("0.05")
 
-# V4.1 thresholds
+# V4.2 thresholds
 DHT8_BIG_BUY_SOL = Decimal("20")
 CLUSTER_BIG_BUY_SOL = Decimal("5")
 CLUSTER_BIG_SELL_SOL = Decimal("3")
 
+# Distribution detector thresholds.
+# This catches patterns like:
+# Big BUY -> many token transfers OUT -> possible distribution / prep for exits.
+CLUSTER_DISTRIBUTION_MIN_TOKEN_AMOUNT = Decimal("1000000")
+SPCX_FAMILY_DISTRIBUTION_MIN_AMOUNT = Decimal("100000000")
+CLUSTER_DISTRIBUTION_MAX_SOL_SPEND = Decimal("1")
+
 # Temporary investigation mode for DHT8.
-# Keep it ON for 24 hours only, then change it back to False.
+# Keep it ON while we study DHT8 behavior.
 DHT8_TRACE_ALL = True
 DHT8_TRACE_MAX_TXS_PER_CYCLE = 10
 
@@ -118,6 +135,17 @@ def _format_time(block_time: int | None) -> str:
     if not block_time:
         return "N/A"
     return datetime.fromtimestamp(block_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _label_for_wallet(wallet_address: str) -> str:
+    for label, address in WATCH_WALLETS.items():
+        if address == wallet_address:
+            return label
+    return "Unknown Wallet"
+
+
+def _is_watched_wallet(wallet_address: str) -> bool:
+    return wallet_address in WATCH_WALLETS.values()
 
 
 def _ensure_active_token_table() -> None:
@@ -320,21 +348,6 @@ def is_tracked_token(mint: str | None) -> bool:
     return bool(active and active.get("status") == "ACTIVE")
 
 
-def _token_label(mint: str | None) -> str:
-    if not mint:
-        return "N/A"
-
-    name = TOKEN_ALIASES.get(mint)
-    if name:
-        return f"{name} ({_short(mint)})"
-
-    active = get_active_token(mint)
-    if active and active.get("symbol"):
-        return f"{active['symbol']} ({_short(mint)})"
-
-    return _short(mint)
-
-
 def fetch_dex_token_info(mint: str) -> dict[str, Any] | None:
     try:
         response = requests.get(f"{DEXSCREENER_TOKEN_URL}/{mint}", timeout=10)
@@ -379,6 +392,72 @@ def fetch_dex_token_info(mint: str) -> dict[str, Any] | None:
         "sells_h1": int(txns_h1.get("sells") or 0),
         "url": pair.get("url") or f"https://dexscreener.com/solana/{mint}",
     }
+
+
+def _token_family_from_text(symbol: str | None, name: str | None) -> str | None:
+    combined = f"{symbol or ''} {name or ''}".lower()
+
+    for family, keywords in TOKEN_FAMILY_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword.lower() in combined:
+                return family
+
+    return None
+
+
+def token_family_for_mint(mint: str | None) -> str | None:
+    if not mint:
+        return None
+
+    alias = TOKEN_ALIASES.get(mint)
+    if alias:
+        family = _token_family_from_text(alias, alias)
+        if family:
+            return family
+
+    active = get_active_token(mint)
+    if active:
+        family = _token_family_from_text(active.get("symbol"), active.get("name"))
+        if family:
+            return family
+
+    dex_info = fetch_dex_token_info(mint)
+    if dex_info:
+        family = _token_family_from_text(dex_info.get("symbol"), dex_info.get("name"))
+        if family:
+            return family
+
+    return None
+
+
+def _is_spcx_family(mint: str | None) -> bool:
+    family = token_family_for_mint(mint)
+    return family == "SPCX / SpaceX Family"
+
+
+def _token_label(mint: str | None) -> str:
+    if not mint:
+        return "N/A"
+
+    name = TOKEN_ALIASES.get(mint)
+    if name:
+        return f"{name} ({_short(mint)})"
+
+    active = get_active_token(mint)
+    if active and active.get("symbol"):
+        family = token_family_for_mint(mint)
+        if family:
+            return f"{active['symbol']} / {family} ({_short(mint)})"
+        return f"{active['symbol']} ({_short(mint)})"
+
+    dex_info = fetch_dex_token_info(mint)
+    if dex_info and dex_info.get("symbol"):
+        family = token_family_for_mint(mint)
+        if family:
+            return f"{dex_info['symbol']} / {family} ({_short(mint)})"
+        return f"{dex_info['symbol']} ({_short(mint)})"
+
+    return _short(mint)
 
 
 def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[str, Any]]:
@@ -453,6 +532,43 @@ def _get_account_keys(details: dict[str, Any]) -> list[str]:
             keys.append(pubkey)
 
     return keys
+
+
+def _get_signers(details: dict[str, Any]) -> list[str]:
+    message = ((details.get("transaction") or {}).get("message") or {})
+    account_keys = message.get("accountKeys") or []
+
+    signers: list[str] = []
+
+    for item in account_keys:
+        if isinstance(item, dict):
+            pubkey = item.get("pubkey")
+            is_signer = bool(item.get("signer"))
+
+            if pubkey and is_signer:
+                signers.append(pubkey)
+
+    return signers
+
+
+def _wallet_role_in_tx(details: dict[str, Any], wallet_address: str) -> str:
+    signers = _get_signers(details)
+
+    if wallet_address in signers:
+        return "SIGNER — DHT8 executed this transaction"
+
+    account_keys = _get_account_keys(details)
+    if wallet_address in account_keys:
+        return "AFFECTED — DHT8 is inside the transaction, but not signer"
+
+    meta = details.get("meta") or {}
+    token_balances = (meta.get("preTokenBalances") or []) + (meta.get("postTokenBalances") or [])
+
+    for item in token_balances:
+        if item.get("owner") == wallet_address:
+            return "TOKEN_OWNER — DHT8 token balance was affected"
+
+    return "UNKNOWN — DHT8 relation not clear"
 
 
 def _sol_delta_for_wallet(details: dict[str, Any], wallet_address: str) -> Decimal:
@@ -541,41 +657,13 @@ def _primary_token_mint(token_changes: list[dict[str, Any]]) -> str | None:
     return token_changes[0].get("mint")
 
 
-def _get_signers(details: dict[str, Any]) -> list[str]:
-    message = ((details.get("transaction") or {}).get("message") or {})
-    account_keys = message.get("accountKeys") or []
+def _is_large_distribution_amount(mint: str | None, amount: Decimal) -> bool:
+    amount_abs = abs(amount)
 
-    signers: list[str] = []
+    if _is_spcx_family(mint):
+        return amount_abs >= SPCX_FAMILY_DISTRIBUTION_MIN_AMOUNT
 
-    for item in account_keys:
-        if isinstance(item, dict):
-            pubkey = item.get("pubkey")
-            is_signer = bool(item.get("signer"))
-
-            if pubkey and is_signer:
-                signers.append(pubkey)
-
-    return signers
-
-
-def _wallet_role_in_tx(details: dict[str, Any], wallet_address: str) -> str:
-    signers = _get_signers(details)
-
-    if wallet_address in signers:
-        return "SIGNER — DHT8 executed this transaction"
-
-    account_keys = _get_account_keys(details)
-    if wallet_address in account_keys:
-        return "AFFECTED — DHT8 is inside the transaction, but not signer"
-
-    meta = details.get("meta") or {}
-    token_balances = (meta.get("preTokenBalances") or []) + (meta.get("postTokenBalances") or [])
-
-    for item in token_balances:
-        if item.get("owner") == wallet_address:
-            return "TOKEN_OWNER — DHT8 token balance was affected"
-
-    return "UNKNOWN — DHT8 relation not clear"
+    return amount_abs >= CLUSTER_DISTRIBUTION_MIN_TOKEN_AMOUNT
 
 
 def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
@@ -647,6 +735,10 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
     trade_like = bool(hints)
     transfer_hits = raw_text.count('"transfer"') + logs_text.count("instruction: transfer")
 
+    # BUY:
+    # DHT8 needs 20 SOL+
+    # Any other cluster wallet needs 5 SOL+
+    # Tracked tokens still notify even if below threshold.
     if positive_tokens and sol_delta < Decimal("-0.001"):
         spent_sol = abs(sol_delta)
         primary_mint = positive_tokens[0].get("mint")
@@ -661,6 +753,8 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             and spent_sol >= CLUSTER_BIG_BUY_SOL
         )
 
+        token_family = token_family_for_mint(primary_mint)
+
         if is_dht8_big_buy:
             return {
                 "emoji": "🟢",
@@ -672,6 +766,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
                 "notify": True,
                 "register_active": True,
                 "active_mint": primary_mint,
+                "token_family": token_family,
                 "noise_reason": "",
             }
 
@@ -686,6 +781,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
                 "notify": True,
                 "register_active": True,
                 "active_mint": primary_mint,
+                "token_family": token_family,
                 "noise_reason": "",
             }
 
@@ -700,6 +796,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
                 "notify": True,
                 "register_active": False,
                 "active_mint": primary_mint,
+                "token_family": token_family,
                 "noise_reason": "",
             }
 
@@ -712,12 +809,17 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "token_changes": token_changes,
             "notify": False,
             "register_active": False,
+            "active_mint": primary_mint,
+            "token_family": token_family,
             "noise_reason": "Buy was below cluster threshold and token is not tracked",
         }
 
+    # SELL:
+    # Notify if tracked token OR any cluster wallet receives 3 SOL+ from selling/spending token.
     if negative_tokens and sol_delta > Decimal("0.001"):
         primary_mint = negative_tokens[0].get("mint")
         is_big_cluster_sell = sol_delta >= CLUSTER_BIG_SELL_SOL
+        token_family = token_family_for_mint(primary_mint)
 
         if is_tracked_token(primary_mint) or is_big_cluster_sell:
             return {
@@ -730,6 +832,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
                 "notify": True,
                 "register_active": False,
                 "active_mint": primary_mint,
+                "token_family": token_family,
                 "noise_reason": "",
             }
 
@@ -742,11 +845,45 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "token_changes": token_changes,
             "notify": False,
             "register_active": False,
+            "active_mint": primary_mint,
+            "token_family": token_family,
             "noise_reason": "Sell was below cluster threshold and token is not tracked",
         }
 
-    if negative_tokens and abs(sol_delta) < Decimal("0.05"):
+    # DISTRIBUTION OUT:
+    # Large token transfer out with no SOL received.
+    # This is the pattern we discovered:
+    # Big buy -> token distribution to many wallets -> possible later sell pressure.
+    if negative_tokens and sol_delta <= Decimal("0") and abs(sol_delta) <= CLUSTER_DISTRIBUTION_MAX_SOL_SPEND:
         primary_mint = negative_tokens[0].get("mint")
+        primary_delta = negative_tokens[0].get("delta") or Decimal("0")
+        token_family = token_family_for_mint(primary_mint)
+
+        if _is_large_distribution_amount(primary_mint, primary_delta):
+            return {
+                "emoji": "🟠",
+                "type": "Cluster Distribution OUT / Possible Prep for Sell",
+                "confidence": "medium-high",
+                "hints": hints or [
+                    "large token balance decreased",
+                    f"transfer signals: {transfer_hits}",
+                    "possible distribution to recipient wallets",
+                ],
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": False,
+                "active_mint": primary_mint,
+                "token_family": token_family,
+                "distribution_warning": True,
+                "noise_reason": "",
+            }
+
+    # Transfer OUT:
+    # Notify if token is tracked/active.
+    if negative_tokens and sol_delta <= Decimal("0") and abs(sol_delta) <= CLUSTER_DISTRIBUTION_MAX_SOL_SPEND:
+        primary_mint = negative_tokens[0].get("mint")
+        token_family = token_family_for_mint(primary_mint)
 
         if is_tracked_token(primary_mint):
             return {
@@ -759,6 +896,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
                 "notify": True,
                 "register_active": False,
                 "active_mint": primary_mint,
+                "token_family": token_family,
                 "noise_reason": "",
             }
 
@@ -771,11 +909,37 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "token_changes": token_changes,
             "notify": False,
             "register_active": False,
+            "active_mint": primary_mint,
+            "token_family": token_family,
             "noise_reason": "Transfer OUT was for untracked token",
         }
 
+    # DISTRIBUTION IN:
+    # Watched wallet received a large amount of token without spending SOL.
     if positive_tokens and abs(sol_delta) < Decimal("0.05"):
         primary_mint = positive_tokens[0].get("mint")
+        primary_delta = positive_tokens[0].get("delta") or Decimal("0")
+        token_family = token_family_for_mint(primary_mint)
+
+        if _is_large_distribution_amount(primary_mint, primary_delta):
+            return {
+                "emoji": "📥",
+                "type": "Cluster Distribution IN / Recipient Wallet",
+                "confidence": "medium",
+                "hints": hints or [
+                    "large token balance increased",
+                    f"transfer signals: {transfer_hits}",
+                    "wallet may be a recipient in distribution pattern",
+                ],
+                "sol_delta": sol_delta,
+                "token_changes": token_changes,
+                "notify": True,
+                "register_active": False,
+                "active_mint": primary_mint,
+                "token_family": token_family,
+                "distribution_warning": True,
+                "noise_reason": "",
+            }
 
         if is_tracked_token(primary_mint):
             return {
@@ -788,6 +952,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
                 "notify": True,
                 "register_active": False,
                 "active_mint": primary_mint,
+                "token_family": token_family,
                 "noise_reason": "",
             }
 
@@ -800,11 +965,14 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
             "token_changes": token_changes,
             "notify": False,
             "register_active": False,
+            "active_mint": primary_mint,
+            "token_family": token_family,
             "noise_reason": "Transfer IN was for untracked token",
         }
 
     if trade_like and positive_tokens and negative_tokens:
         primary_mint = _primary_token_mint(token_changes)
+        token_family = token_family_for_mint(primary_mint)
 
         if is_tracked_token(primary_mint):
             return {
@@ -817,6 +985,7 @@ def analyze_transaction(signature: str, wallet_address: str) -> dict[str, Any]:
                 "notify": True,
                 "register_active": False,
                 "active_mint": primary_mint,
+                "token_family": token_family,
                 "noise_reason": "",
             }
 
@@ -942,9 +1111,10 @@ def build_wallet_activity_summary(
 
     token_changes = analysis.get("token_changes") or []
     primary_mint = _primary_token_mint(token_changes)
+    token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.1",
+        f"{analysis['emoji']} Wallet Watch V4.2",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -952,10 +1122,24 @@ def build_wallet_activity_summary(
         f"Confidence: {analysis['confidence']}",
         f"Hints: {hints_text}",
         f"SOL delta: {sol_sign}{_fmt_decimal(sol_delta, 6)} SOL",
-        "",
     ]
 
+    if token_family:
+        lines.append(f"Token Family: {token_family}")
+
+    lines.append("")
     lines.extend(_format_token_changes(token_changes))
+
+    if analysis.get("distribution_warning"):
+        lines.extend(
+            [
+                "",
+                "⚠️ Cluster Pattern Detector:",
+                "Large token distribution detected.",
+                "Meaning: possible distribution after buy / prep for sell pressure.",
+                "Action: Do not enter late. Watch exits and recipient wallets.",
+            ]
+        )
 
     if analysis.get("register_active") and primary_mint:
         lines.extend(
@@ -1030,6 +1214,8 @@ def build_dht8_trace_message(
 
     noise_reason = analysis.get("noise_reason") or "N/A"
     token_changes = analysis.get("token_changes") or []
+    primary_mint = _primary_token_mint(token_changes)
+    token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
         "🕵️ DHT8 Full Trace",
@@ -1044,12 +1230,14 @@ def build_dht8_trace_message(
         f"Noise reason: {noise_reason}",
         "",
         f"SOL delta: {sol_sign}{_fmt_decimal(sol_delta, 6)} SOL",
-        "",
     ]
 
+    if token_family:
+        lines.append(f"Token Family: {token_family}")
+
+    lines.append("")
     lines.extend(_format_token_changes(token_changes))
 
-    primary_mint = _primary_token_mint(token_changes)
     if primary_mint:
         lines.extend(
             [
@@ -1097,12 +1285,20 @@ def build_active_token_alert(token: dict[str, Any], dex_info: dict[str, Any], al
     if entry_liq > 0:
         liquidity_from_entry = ((liquidity - entry_liq) / entry_liq) * Decimal("100")
 
-    return "\n".join(
+    token_family = token_family_for_mint(mint)
+
+    lines = [
+        f"⚠️ Active Token Alert — {alert_type}",
+        "",
+        f"Token: {symbol}",
+        f"Mint: {_short(mint)}",
+    ]
+
+    if token_family:
+        lines.append(f"Token Family: {token_family}")
+
+    lines.extend(
         [
-            f"⚠️ Active Token Alert — {alert_type}",
-            "",
-            f"Token: {symbol}",
-            f"Mint: {_short(mint)}",
             f"Reason: {reason}",
             "",
             f"Price: {_fmt_usd(price)}",
@@ -1125,6 +1321,8 @@ def build_active_token_alert(token: dict[str, Any], dex_info: dict[str, Any], al
             "Action: Watch only. No auto entry.",
         ]
     )
+
+    return "\n".join(lines)
 
 
 def monitor_active_tokens() -> list[str]:
@@ -1204,6 +1402,7 @@ async def run_wallet_watch_cycle(context) -> None:
 
         last_seen = get_last_signature(wallet_address)
 
+        # First initialization only. Do not send old historical txs.
         if not last_seen:
             save_wallet_signature(
                 wallet_address=wallet_address,
@@ -1230,6 +1429,8 @@ async def run_wallet_watch_cycle(context) -> None:
 
         new_txs = new_txs[:10]
 
+        # Special DHT8 investigation mode:
+        # Send every new DHT8 tx, even if normal filter would ignore it.
         if wallet_address == DHT8_MAIN_WALLET and DHT8_TRACE_ALL:
             txs_to_trace = new_txs[:DHT8_TRACE_MAX_TXS_PER_CYCLE]
 
