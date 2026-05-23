@@ -43,13 +43,14 @@ WATCH_WALLETS: dict[str, str] = {
     "Cluster 7nwP": "7nwPXZNhBj88jcC22VNBQUYLohTsQWh5VGxWqnAAcvMf",
     "Cluster JD6r": "JD6rVaerbyz6wjQ433nrw6bFTgFrp46MiYmi8EtUAfsG",
 
-    # Confirmed active wallets from SPCX / related activity
+        # Confirmed active wallets from SPCX / related activity
     "Cluster 2usC": "2usC51yJqENTS6U4bo19AmDspRF9UizrmkMQrB3Pxno3",
     "Cluster GAMq": "973vghafz4fQYB3MquWdLZd8dBMzJWcsTyBxH2GAMqcY",
-    "Cluster G8R7 Buyer Distributor": "G8R73oApukNBHynSnmXWamhJuc1WWr7tBUAnra9wMdTt
+    "Cluster G8R7 Buyer Distributor": "G8R73oApukNBHynSnmXWamhJuc1WWr7tBUAnra9wMdTt",
     "Cluster JBS2 Initial Buyer": "JBS2K42NigjzTd9sSc2qp8ySMyZL5t82UAGudgjhMXpY",
-    "Cluster A4tT Initial Buyer": "A4tTYEDfscYjAEpTymoNAzTZ9FnXouxKhe3iuBTDuQXz",",
+    "Cluster A4tT Initial Buyer": "A4tTYEDfscYjAEpTymoNAzTZ9FnXouxKhe3iuBTDuQXz",
 }
+
 
 TOKEN_ALIASES: dict[str, str] = {
     "D6uqF8hPTP62yN3M2NhJUn8NPR9zTcyQS5pFE2QKfXnm": "SpaceX",
