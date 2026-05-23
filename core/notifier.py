@@ -39,12 +39,24 @@ def _security_note(security_checks: dict | None) -> str:
     return notes[0]
 
 
+def _raydium_note(raydium_info: dict | None) -> str:
+    if not raydium_info:
+        return "N/A"
+
+    notes = raydium_info.get("notes") or []
+    if not notes:
+        return "N/A"
+
+    return notes[0]
+
+
 def build_token_alert(
     token: dict,
     safety: dict,
     scores: dict,
     signal: dict,
     security_checks: dict | None = None,
+    raydium_info: dict | None = None,
 ) -> str:
     symbol = token.get("symbol", "UNKNOWN")
     address = token.get("address", "")
@@ -75,6 +87,33 @@ def build_token_alert(
         lp_status = security_checks.get("lp_status", "NOT_CHECKED")
         security_note = _security_note(security_checks)
 
+    raydium_quality = "NOT_CHECKED"
+    raydium_score = "N/A"
+    dex_id = "N/A"
+    pair_age = "N/A"
+    raydium_liquidity = 0
+    raydium_volume_h1 = 0
+    raydium_price_change_h1 = 0
+    raydium_buys_h1 = 0
+    raydium_sells_h1 = 0
+    raydium_buy_sell_ratio = 0
+    raydium_vol_liq_ratio = 0
+    raydium_note = "N/A"
+
+    if raydium_info:
+        raydium_quality = raydium_info.get("raydium_quality", "UNKNOWN")
+        raydium_score = raydium_info.get("raydium_score", "N/A")
+        dex_id = raydium_info.get("dex_id", "N/A")
+        pair_age = raydium_info.get("pair_age_text", "N/A")
+        raydium_liquidity = raydium_info.get("liquidity_usd", 0)
+        raydium_volume_h1 = raydium_info.get("volume_h1", 0)
+        raydium_price_change_h1 = raydium_info.get("price_change_h1", 0)
+        raydium_buys_h1 = raydium_info.get("buys_h1", 0)
+        raydium_sells_h1 = raydium_info.get("sells_h1", 0)
+        raydium_buy_sell_ratio = raydium_info.get("buy_sell_ratio", 0)
+        raydium_vol_liq_ratio = raydium_info.get("volume_liquidity_ratio", 0)
+        raydium_note = _raydium_note(raydium_info)
+
     dex_url = token.get(
         "dex_url",
         f"https://dexscreener.com/solana/{address}"
@@ -95,6 +134,18 @@ def build_token_alert(
         f"🧊 Freeze Authority: {freeze_authority}\n"
         f"🔥 LP Status: {lp_status}\n"
         f"📝 Security Note: {security_note}\n\n"
+        f"🧬 Raydium Intelligence\n"
+        f"DEX: {dex_id}\n"
+        f"Pair Age: {pair_age}\n"
+        f"Raydium Quality: {raydium_quality}\n"
+        f"Raydium Score: {raydium_score}/100\n"
+        f"Raydium Liquidity: {fmt_money(raydium_liquidity)}\n"
+        f"Raydium Volume 1H: {fmt_money(raydium_volume_h1)}\n"
+        f"Raydium 1H Change: {fmt_pct(raydium_price_change_h1)}\n"
+        f"Raydium Buys/Sells: {raydium_buys_h1}/{raydium_sells_h1}\n"
+        f"Raydium Buy/Sell Ratio: {_format_ratio(raydium_buy_sell_ratio)}\n"
+        f"Raydium Vol/Liq Ratio: {_format_ratio(raydium_vol_liq_ratio)}\n"
+        f"Raydium Note: {raydium_note}\n\n"
         f"📊 Total Score: {scores['total_score']}/100\n"
         f"🛡️ Safety: {scores['safety_score']}/40\n"
         f"🔥 Momentum: {scores['momentum_score']}/30\n"
@@ -130,7 +181,7 @@ def build_position_open_alert(position: dict) -> str:
     dex_url = f"https://dexscreener.com/solana/{address}"
 
     return (
-        f"🟢 Paper Trade Opened — ELITE + SECURITY\n\n"
+        f"🟢 Paper Trade Opened — ELITE + SECURITY + RAYDIUM\n\n"
         f"🪙 Token: {symbol}\n"
         f"💵 Capital: ${capital:.2f}\n\n"
         f"🎯 Entry: ${entry:.8f}\n"
