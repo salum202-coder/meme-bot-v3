@@ -43,7 +43,7 @@ WATCH_WALLETS: dict[str, str] = {
     "Cluster 7nwP": "7nwPXZNhBj88jcC22VNBQUYLohTsQWh5VGxWqnAAcvMf",
     "Cluster JD6r": "JD6rVaerbyz6wjQ433nrw6bFTgFrp46MiYmi8EtUAfsG",
 
-        # Confirmed active wallets from SPCX / related activity
+    # Confirmed active wallets from SPCX / SLX related activity
     "Cluster 2usC": "2usC51yJqENTS6U4bo19AmDspRF9UizrmkMQrB3Pxno3",
     "Cluster GAMq": "973vghafz4fQYB3MquWdLZd8dBMzJWcsTyBxH2GAMqcY",
     "Cluster G8R7 Buyer Distributor": "G8R73oApukNBHynSnmXWamhJuc1WWr7tBUAnra9wMdTt",
@@ -57,13 +57,20 @@ TOKEN_ALIASES: dict[str, str] = {
     "21EsdVV4apT8dK9UtcuBZGNUS2P7PikL5iBf2SVYGSqg": "SPCX",
 }
 
+
 # Token family detector.
-# Important: SPCX / SpaceX may keep the same name but use a new mint every time.
+# Important:
+# SPCX / SpaceX may keep the same name but use a new mint every time.
+# SLX / Solstice also appears in the same cluster behavior.
 TOKEN_FAMILY_KEYWORDS: dict[str, list[str]] = {
     "SPCX / SpaceX Family": [
         "spcx",
         "spacex",
         "space x",
+    ],
+    "SLX / Solstice Family": [
+        "slx",
+        "solstice",
     ],
 }
 
