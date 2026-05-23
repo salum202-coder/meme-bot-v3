@@ -1391,6 +1391,7 @@ async def run_wallet_watch_cycle(context) -> None:
 
     for label, wallet_address in WATCH_WALLETS.items():
         await asyncio.sleep(0.35)
+
         signatures = fetch_wallet_signatures(wallet_address, limit=10)
 
         if not signatures:
