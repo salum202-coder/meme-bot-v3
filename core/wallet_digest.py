@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -17,8 +18,14 @@ from core.wallet_watcher import (
 
 
 LOOKBACK_MINUTES = 30
-MAX_TXS_PER_WALLET_IN_DIGEST = 3
-MAX_LINES_PER_MESSAGE = 10
+MAX_TXS_TO_FETCH_PER_WALLET = 20
+MAX_IMPORTANT_LINES_PER_MESSAGE = 8
+
+NOISE_TYPES = {
+    "Trade order / no visible fill",
+    "Unknown",
+    "General Wallet Activity",
+}
 
 
 def _digest_token_summary(token_changes: list[dict[str, Any]]) -> str:
@@ -33,7 +40,26 @@ def _digest_token_summary(token_changes: list[dict[str, Any]]) -> str:
     return f"Token: {_token_label(mint)} {sign}{_fmt_decimal(delta, 4)}"
 
 
-def _digest_line(
+def _is_important_analysis(analysis: dict[str, Any]) -> bool:
+    if analysis.get("notify"):
+        return True
+
+    analysis_type = analysis.get("type", "")
+    if "BUY" in analysis_type:
+        return True
+    if "SELL" in analysis_type:
+        return True
+    if "Distribution" in analysis_type:
+        return True
+    if "Transfer OUT" in analysis_type and "ignored" not in analysis_type:
+        return True
+    if "Transfer IN" in analysis_type and "ignored" not in analysis_type:
+        return True
+
+    return False
+
+
+def _important_line(
     label: str,
     wallet_address: str,
     tx: dict[str, Any],
@@ -49,74 +75,66 @@ def _digest_line(
     token_text = _digest_token_summary(token_changes)
 
     status = "✅" if _is_success(tx) else "❌"
+    token_family = analysis.get("token_family")
+
+    lines = [
+        f"{status} {label} | {_short(wallet_address)}",
+        f"Time: {time_text}",
+        f"Type: {analysis.get('type', 'Unknown')}",
+        f"SOL: {sol_sign}{_fmt_decimal(sol_delta, 6)}",
+    ]
+
+    if token_family:
+        lines.append(f"Family: {token_family}")
+
+    lines.extend(
+        [
+            token_text,
+            f"Tx: https://solscan.io/tx/{signature}",
+        ]
+    )
+
+    return "\n".join(lines)
+
+
+def _wallet_summary_line(
+    label: str,
+    wallet_address: str,
+    total: int,
+    type_counter: Counter,
+    important_count: int,
+) -> str:
+    top_types = []
+    for type_name, count in type_counter.most_common(4):
+        top_types.append(f"{count} {type_name}")
+
+    top_text = " | ".join(top_types) if top_types else "No classified activity"
+
+    if important_count > 0:
+        prefix = "🔥"
+        note = f"{important_count} important"
+    else:
+        prefix = "⚪"
+        note = "No BUY / SELL / Distribution detected"
 
     return (
-        f"{status} {label} | {_short(wallet_address)}\n"
-        f"Time: {time_text}\n"
-        f"Type: {analysis.get('type', 'Unknown')}\n"
-        f"SOL: {sol_sign}{_fmt_decimal(sol_delta, 6)}\n"
-        f"{token_text}\n"
-        f"Tx: https://solscan.io/tx/{signature}"
+        f"{prefix} {label} | {_short(wallet_address)}\n"
+        f"Txs: {total} | {note}\n"
+        f"Types: {top_text}"
     )
 
 
-def build_wallet_digest_report(
-    activity_lines: list[str],
-    inactive_wallets: list[str],
-    total_txs: int,
-    part_number: int = 1,
-    total_parts: int = 1,
-) -> str:
-    header = [
-        "🧾 Wallet Cluster 30m Digest",
-        "",
-        f"Period: last {LOOKBACK_MINUTES} minutes",
-        f"Watched wallets: {len(WATCH_WALLETS)}",
-        f"Total txs found: {total_txs}",
-    ]
-
-    if total_parts > 1:
-        header.append(f"Part: {part_number}/{total_parts}")
-
-    header.append("")
-
-    if activity_lines:
-        header.append("Recent activity:")
-        body = "\n\n".join(activity_lines)
-    else:
-        header.append("No wallet activity found in this period.")
-        body = ""
-
-    footer: list[str] = []
-    if inactive_wallets and part_number == 1:
-        footer.extend(
-            [
-                "",
-                f"No activity: {len(inactive_wallets)} wallets",
-                ", ".join(inactive_wallets[:12]) + ("..." if len(inactive_wallets) > 12 else ""),
-            ]
-        )
-
-    footer.extend(["", "Action: Digest only. No auto entry."])
-
-    pieces = ["\n".join(header)]
-    if body:
-        pieces.append(body)
-    pieces.append("\n".join(footer))
-
-    return "\n\n".join(pieces)
-
-
-def collect_wallet_digest() -> tuple[list[str], list[str], int]:
+def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int]:
     now_ts = int(datetime.now(timezone.utc).timestamp())
     cutoff_ts = now_ts - (LOOKBACK_MINUTES * 60)
 
-    activity_lines: list[str] = []
+    wallet_summaries: list[str] = []
+    important_lines: list[str] = []
     inactive_wallets: list[str] = []
     total_txs = 0
 
     for label, wallet_address in WATCH_WALLETS.items():
-        signatures = fetch_wallet_signatures(wallet_address, limit=15)
+        signatures = fetch_wallet_signatures(wallet_address, limit=MAX_TXS_TO_FETCH_PER_WALLET)
 
         recent_txs = [
             tx for tx in signatures
@@ -129,15 +147,86 @@ def collect_wallet_digest() -> tuple[list[str], list[str], int]:
 
         total_txs += len(recent_txs)
 
-        for tx in recent_txs[:MAX_TXS_PER_WALLET_IN_DIGEST]:
+        type_counter: Counter = Counter()
+        important_count = 0
+
+        for tx in recent_txs:
             signature = tx.get("signature") or ""
             if not signature:
                 continue
 
             analysis = analyze_transaction(signature, wallet_address)
-            activity_lines.append(_digest_line(label, wallet_address, tx, analysis))
+            analysis_type = analysis.get("type", "Unknown")
+            type_counter[analysis_type] += 1
 
-    return activity_lines, inactive_wallets, total_txs
+            if _is_important_analysis(analysis):
+                important_count += 1
+                important_lines.append(_important_line(label, wallet_address, tx, analysis))
+
+        wallet_summaries.append(
+            _wallet_summary_line(
+                label=label,
+                wallet_address=wallet_address,
+                total=len(recent_txs),
+                type_counter=type_counter,
+                important_count=important_count,
+            )
+        )
+
+    return wallet_summaries, important_lines, inactive_wallets, total_txs
+
+
+def build_wallet_digest_report(
+    wallet_summaries: list[str],
+    important_lines: list[str],
+    inactive_wallets: list[str],
+    total_txs: int,
+    part_number: int = 1,
+    total_parts: int = 1,
+) -> str:
+    lines = [
+        "🧾 Wallet Cluster 30m Digest",
+        "",
+        f"Period: last {LOOKBACK_MINUTES} minutes",
+        f"Watched wallets: {len(WATCH_WALLETS)}",
+        f"Total txs found: {total_txs}",
+    ]
+
+    if total_parts > 1:
+        lines.append(f"Part: {part_number}/{total_parts}")
+
+    lines.append("")
+
+    if important_lines:
+        lines.append("🔥 Important activity:")
+        lines.append("")
+        lines.extend(important_lines)
+        lines.append("")
+
+    if wallet_summaries and part_number == 1:
+        lines.append("Wallet summary:")
+        lines.append("")
+        lines.extend(wallet_summaries)
+    elif not important_lines and not wallet_summaries:
+        lines.append("No wallet activity found in this period.")
+
+    if inactive_wallets and part_number == 1:
+        lines.extend(
+            [
+                "",
+                f"No activity: {len(inactive_wallets)} wallets",
+                ", ".join(inactive_wallets[:12]) + ("..." if len(inactive_wallets) > 12 else ""),
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "Action: Digest only. No auto entry.",
+        ]
+    )
+
+    return "\n\n".join(lines)
 
 
 async def send_wallet_digest(context) -> None:
@@ -149,27 +238,34 @@ async def send_wallet_digest(context) -> None:
     if not chat_id:
         return
 
-    activity_lines, inactive_wallets, total_txs = collect_wallet_digest()
+    wallet_summaries, important_lines, inactive_wallets, total_txs = collect_wallet_digest()
 
-    if not activity_lines:
+    if not important_lines:
         await context.bot.send_message(
             chat_id=chat_id,
-            text=build_wallet_digest_report([], inactive_wallets, total_txs),
+            text=build_wallet_digest_report(
+                wallet_summaries=wallet_summaries,
+                important_lines=[],
+                inactive_wallets=inactive_wallets,
+                total_txs=total_txs,
+            ),
             disable_web_page_preview=True,
         )
         return
 
     chunks = [
-        activity_lines[index:index + MAX_LINES_PER_MESSAGE]
-        for index in range(0, len(activity_lines), MAX_LINES_PER_MESSAGE)
+        important_lines[index:index + MAX_IMPORTANT_LINES_PER_MESSAGE]
+        for index in range(0, len(important_lines), MAX_IMPORTANT_LINES_PER_MESSAGE)
     ]
 
     total_parts = len(chunks)
+
     for index, chunk in enumerate(chunks, start=1):
         await context.bot.send_message(
             chat_id=chat_id,
             text=build_wallet_digest_report(
-                activity_lines=chunk,
+                wallet_summaries=wallet_summaries if index == 1 else [],
+                important_lines=chunk,
                 inactive_wallets=inactive_wallets if index == 1 else [],
                 total_txs=total_txs,
                 part_number=index,
