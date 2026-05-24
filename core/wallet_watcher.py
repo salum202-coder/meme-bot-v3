@@ -100,7 +100,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.3
+# Paper Copy Mode V4.4
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -122,6 +122,21 @@ PAPER_STOP_LOSS_PCT = Decimal("0.25")
 PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
+
+# Critical First Init Mode V4.4
+# When a newly added high-value wallet has no saved last_signature yet,
+# analyze its latest transaction if it is fresh, instead of silently skipping it.
+CRITICAL_FIRST_INIT_ENABLED = True
+CRITICAL_FIRST_INIT_WINDOW_SECONDS = 60 * 60
+
+CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
+    "GAMq",
+    "G8R7 Buyer Distributor",
+    "JBS2 Initial Buyer",
+    "A4tT Initial Buyer",
+    "6g4v Initial Buyer",
+    "5syp Initial Buyer",
+)
 
 
 def _now_iso() -> str:
@@ -183,6 +198,22 @@ def _label_for_wallet(wallet_address: str) -> str:
 
 def _is_watched_wallet(wallet_address: str) -> bool:
     return wallet_address in WATCH_WALLETS.values()
+
+
+def _is_critical_first_init_wallet(label: str) -> bool:
+    if not CRITICAL_FIRST_INIT_ENABLED:
+        return False
+    return any(keyword in label for keyword in CRITICAL_FIRST_INIT_LABEL_KEYWORDS)
+
+
+def _is_recent_block_time(block_time: int | None, window_seconds: int) -> bool:
+    if not block_time:
+        return False
+
+    now_ts = datetime.now(timezone.utc).timestamp()
+    age_seconds = now_ts - float(block_time)
+
+    return 0 <= age_seconds <= window_seconds
 
 
 def _ensure_active_token_table() -> None:
@@ -1109,7 +1140,7 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.3
+# Paper Copy Mode V4.4
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1639,7 +1670,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.3",
+        f"{analysis['emoji']} Wallet Watch V4.4",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -1929,8 +1960,53 @@ async def run_wallet_watch_cycle(context) -> None:
 
         last_seen = get_last_signature(wallet_address)
 
-        # First initialization only. Do not send old historical txs.
+        # First initialization.
+        # Normal wallets: save latest signature only and skip old history.
+        # Critical wallets: if the latest tx is fresh, analyze it once so we do not miss
+        # first BUY/SELL/Distribution after adding a new wallet.
         if not last_seen:
+            if _is_critical_first_init_wallet(label) and _is_recent_block_time(
+                latest_block_time,
+                CRITICAL_FIRST_INIT_WINDOW_SECONDS,
+            ):
+                analysis = analyze_transaction(latest_signature, wallet_address)
+
+                if analysis.get("notify"):
+                    maybe_register_active_token(
+                        label=label,
+                        wallet_address=wallet_address,
+                        signature=latest_signature,
+                        analysis=analysis,
+                    )
+
+                    paper_messages = maybe_handle_paper_copy_signal(
+                        label=label,
+                        wallet_address=wallet_address,
+                        signature=latest_signature,
+                        analysis=analysis,
+                    )
+
+                    if chat_id:
+                        for paper_message in paper_messages:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=paper_message,
+                                disable_web_page_preview=True,
+                            )
+
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=build_wallet_activity_summary(
+                                label=label,
+                                wallet_address=wallet_address,
+                                new_txs=[signatures[0]],
+                                important_tx=signatures[0],
+                                analysis=analysis,
+                                ignored_count=0,
+                            ),
+                            disable_web_page_preview=True,
+                        )
+
             save_wallet_signature(
                 wallet_address=wallet_address,
                 label=label,
