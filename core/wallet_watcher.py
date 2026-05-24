@@ -100,7 +100,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.5
+# Paper Copy Mode V4.6
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -123,7 +123,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.5
+# Critical First Init Mode V4.6
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -138,12 +138,21 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "5syp Initial Buyer",
 )
 
-# New Mint Watch V4.5
+# New Mint Watch V4.6
 # DHT8 Distribution IN is not an entry by itself.
 # It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
 NEW_MINT_WATCH_ENABLED = True
 NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
 
+# New Mint Metrics Entry V4.6
+# If DHT8 receives a new mint and the token quickly shows strong DexScreener metrics,
+# open a PAPER trade even if the early buyer wallet is unknown.
+NEW_MINT_METRICS_ENTRY_ENABLED = True
+NEW_MINT_METRICS_MAX_AGE_SECONDS = 30 * 60
+NEW_MINT_METRICS_MIN_LIQUIDITY_USD = Decimal("80000")
+NEW_MINT_METRICS_MIN_VOLUME_H1_USD = Decimal("50000")
+NEW_MINT_METRICS_MIN_BUYS_H1 = 20
+NEW_MINT_METRICS_MIN_BUY_SELL_RATIO = Decimal("1.20")
 
 
 def _now_iso() -> str:
@@ -453,6 +462,17 @@ def fetch_dex_token_info(mint: str) -> dict[str, Any] | None:
     txns = pair.get("txns") or {}
     txns_h1 = txns.get("h1") or {}
 
+    pair_created_at = pair.get("pairCreatedAt")
+    pair_age_seconds = None
+    try:
+        if pair_created_at:
+            pair_age_seconds = max(
+                0,
+                int(datetime.now(timezone.utc).timestamp() - (int(pair_created_at) / 1000)),
+            )
+    except Exception:
+        pair_age_seconds = None
+
     return {
         "mint": mint,
         "symbol": base.get("symbol") or TOKEN_ALIASES.get(mint),
@@ -466,6 +486,8 @@ def fetch_dex_token_info(mint: str) -> dict[str, Any] | None:
         "buys_h1": int(txns_h1.get("buys") or 0),
         "sells_h1": int(txns_h1.get("sells") or 0),
         "url": pair.get("url") or f"https://dexscreener.com/solana/{mint}",
+        "pair_created_at": pair_created_at,
+        "pair_age_seconds": pair_age_seconds,
     }
 
 
@@ -1147,7 +1169,7 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# New Mint Watch V4.5
+# New Mint Watch V4.6
 # ---------------------------------------------------------------------------
 
 def _ensure_new_mint_watch_table() -> None:
@@ -1190,6 +1212,66 @@ def get_new_mint_watch(mint: str) -> dict[str, Any] | None:
             return None
 
         return dict(row)
+
+
+def list_new_mint_watches(status: str = "WATCHING") -> list[dict[str, Any]]:
+    _ensure_new_mint_watch_table()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM new_mint_watch
+            WHERE status = ?
+            ORDER BY first_seen_at DESC
+            """,
+            (status,),
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+
+
+def update_new_mint_watch_status(
+    mint: str,
+    status: str,
+    last_alert: str | None = None,
+) -> None:
+    _ensure_new_mint_watch_table()
+    now = _now_iso()
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE new_mint_watch
+            SET
+                status = ?,
+                last_checked_at = ?,
+                last_alert = COALESCE(?, last_alert),
+                updated_at = ?
+            WHERE mint = ?
+            """,
+            (status, now, last_alert, now, mint),
+        )
+        conn.commit()
+
+
+def update_new_mint_watch_checked(mint: str, last_alert: str | None = None) -> None:
+    _ensure_new_mint_watch_table()
+    now = _now_iso()
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE new_mint_watch
+            SET
+                last_checked_at = ?,
+                last_alert = COALESCE(?, last_alert),
+                updated_at = ?
+            WHERE mint = ?
+            """,
+            (now, last_alert, now, mint),
+        )
+        conn.commit()
 
 
 def save_new_mint_watch(
@@ -1274,7 +1356,7 @@ def build_new_mint_watch_message(
 
     return "\n".join(
         [
-            "👀 NEW MINT WATCH V4.5",
+            "👀 NEW MINT WATCH V4.6",
             "",
             f"Token: {symbol}",
             f"Mint: {_short(mint)}",
@@ -1291,7 +1373,7 @@ def build_new_mint_watch_message(
             f"Buys/Sells 1H: {buys_h1}/{sells_h1}",
             "",
             "Next trigger needed for Paper Entry:",
-            "6g4v / 5syp / JBS2 / A4tT / G8R7 Big BUY on this mint.",
+            "Known buyer Big BUY OR strong Dex metrics on this watched mint.",
             "",
             "Exit danger:",
             "DHT8 → GAMq or GAMq SELL.",
@@ -1358,7 +1440,7 @@ def maybe_handle_new_mint_watch_signal(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.5
+# Paper Copy Mode V4.6
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1733,6 +1815,23 @@ def maybe_handle_paper_copy_signal(
 
     open_trade = get_open_paper_trade(mint)
 
+    # If a watched new mint is moved out by DHT8 or sold by GAMq, stop watching it for entries.
+    if label == "DHT8 Main" and "Distribution OUT" in analysis_type:
+        if get_new_mint_watch(mint):
+            update_new_mint_watch_status(
+                mint=mint,
+                status="EXIT_RISK",
+                last_alert="DHT8_DISTRIBUTION_OUT",
+            )
+
+    if "GAMq" in label and ("SELL" in analysis_type or "Distribution OUT" in analysis_type):
+        if get_new_mint_watch(mint):
+            update_new_mint_watch_status(
+                mint=mint,
+                status="GAMQ_EXIT",
+                last_alert="GAMQ_EXIT_ACTIVITY",
+            )
+
     # Exit rule 1: DHT8 transferred the same token out.
     # This is the strongest pre-exit signal we discovered before GAMq sells.
     if open_trade and label == "DHT8 Main" and "Distribution OUT" in analysis_type:
@@ -1793,6 +1892,94 @@ def maybe_handle_paper_copy_signal(
             dex_info=dex_info,
         )
     )
+
+    return messages
+
+
+def _new_mint_metrics_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
+    price = dex_info.get("price_usd") or Decimal("0")
+    liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+    volume_h1 = dex_info.get("volume_h1") or Decimal("0")
+    buys_h1 = int(dex_info.get("buys_h1") or 0)
+    ratio = _paper_buy_sell_ratio(dex_info)
+    pair_age_seconds = dex_info.get("pair_age_seconds")
+
+    if price <= 0:
+        return False, "Price is not available."
+
+    if pair_age_seconds is not None and pair_age_seconds > NEW_MINT_METRICS_MAX_AGE_SECONDS:
+        return False, "Pair age is above the new-mint entry window."
+
+    if liquidity < NEW_MINT_METRICS_MIN_LIQUIDITY_USD:
+        return False, f"Liquidity below {_fmt_usd(NEW_MINT_METRICS_MIN_LIQUIDITY_USD)}."
+
+    if volume_h1 < NEW_MINT_METRICS_MIN_VOLUME_H1_USD:
+        return False, f"Volume 1H below {_fmt_usd(NEW_MINT_METRICS_MIN_VOLUME_H1_USD)}."
+
+    if buys_h1 < NEW_MINT_METRICS_MIN_BUYS_H1:
+        return False, f"Buys 1H below {NEW_MINT_METRICS_MIN_BUYS_H1}."
+
+    if ratio < NEW_MINT_METRICS_MIN_BUY_SELL_RATIO:
+        return False, f"Buy/Sell ratio below {_fmt_decimal(NEW_MINT_METRICS_MIN_BUY_SELL_RATIO, 2)}x."
+
+    return True, "New mint metrics entry quality passed."
+
+
+def monitor_new_mint_metric_entries() -> list[str]:
+    if not PAPER_COPY_ENABLED or not NEW_MINT_METRICS_ENTRY_ENABLED:
+        return []
+
+    messages: list[str] = []
+
+    for watched in list_new_mint_watches(status="WATCHING"):
+        mint = watched.get("mint")
+        if not mint:
+            continue
+
+        if get_open_paper_trade(mint):
+            update_new_mint_watch_status(
+                mint=mint,
+                status="PAPER_OPEN",
+                last_alert="PAPER_ALREADY_OPEN",
+            )
+            continue
+
+        token_family = watched.get("token_family") or token_family_for_mint(mint)
+        if not _is_paper_allowed_family(token_family):
+            continue
+
+        dex_info = fetch_dex_token_info(mint)
+        if not dex_info:
+            update_new_mint_watch_checked(mint)
+            continue
+
+        passed, reason = _new_mint_metrics_entry_quality(dex_info)
+        if not passed:
+            update_new_mint_watch_checked(mint)
+            continue
+
+        analysis = {
+            "type": "New Mint Metrics Entry",
+            "token_family": token_family,
+            "paper_reason": "DHT8 New Mint Watch + strong Dex metrics; early buyers may be unknown.",
+        }
+
+        messages.append(
+            open_paper_copy_trade(
+                mint=mint,
+                label="DHT8 New Mint Watch / Metrics",
+                wallet_address=watched.get("source_wallet") or DHT8_MAIN_WALLET,
+                signature=watched.get("source_signature") or "",
+                analysis=analysis,
+                dex_info=dex_info,
+            )
+        )
+
+        update_new_mint_watch_status(
+            mint=mint,
+            status="PAPER_OPEN",
+            last_alert="METRICS_PAPER_ENTRY",
+        )
 
     return messages
 
@@ -1904,7 +2091,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.5",
+        f"{analysis['emoji']} Wallet Watch V4.6",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -2402,6 +2589,13 @@ async def run_wallet_watch_cycle(context) -> None:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=alert,
+                disable_web_page_preview=True,
+            )
+
+        for paper_message in monitor_new_mint_metric_entries():
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=paper_message,
                 disable_web_page_preview=True,
             )
 
