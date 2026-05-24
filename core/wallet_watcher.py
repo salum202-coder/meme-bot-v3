@@ -49,6 +49,8 @@ WATCH_WALLETS: dict[str, str] = {
     "Cluster G8R7 Buyer Distributor": "G8R73oApukNBHynSnmXWamhJuc1WWr7tBUAnra9wMdTt",
     "Cluster JBS2 Initial Buyer": "JBS2K42NigjzTd9sSc2qp8ySMyZL5t82UAGudgjhMXpY",
     "Cluster A4tT Initial Buyer": "A4tTYEDfscYjAEpTymoNAzTZ9FnXouxKhe3iuBTDuQXz",
+    "Cluster 6g4v Initial Buyer": "BpkvZYRdDohvyL9gdC9hCadLnVeWFLoEjEmxz166g4vu2",
+    "Cluster 5syp Initial Buyer": "NXGmCzx2qnnokMPdzUh336vRJWddRiBFZn6F85syp1Y",
 }
 
 
@@ -97,6 +99,29 @@ LIQUIDITY_RUG_USD = Decimal("1000")
 LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
+
+# Paper Copy Mode V4.3
+# Important: this is PAPER ONLY. No real buy/sell is executed here.
+PAPER_COPY_ENABLED = True
+
+PAPER_ENTRY_LABEL_KEYWORDS = (
+    "Initial Buyer",
+    "G8R7 Buyer Distributor",
+)
+
+PAPER_ALLOWED_FAMILIES = (
+    "SPCX / SpaceX Family",
+    "SLX / Solstice Family",
+)
+
+PAPER_MIN_LIQUIDITY_USD = Decimal("80000")
+PAPER_MIN_VOLUME_H1_USD = Decimal("10000")
+PAPER_MIN_BUY_SELL_RATIO = Decimal("2.0")
+
+PAPER_STOP_LOSS_PCT = Decimal("0.25")
+PAPER_TRAILING_DROP_PCT = Decimal("0.30")
+PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
+PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
 
 def _now_iso() -> str:
@@ -1082,6 +1107,494 @@ def maybe_register_active_token(
     )
 
 
+
+# ---------------------------------------------------------------------------
+# Paper Copy Mode V4.3
+# ---------------------------------------------------------------------------
+
+def _ensure_paper_copy_table() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_copy_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mint TEXT UNIQUE,
+                symbol TEXT,
+                name TEXT,
+                token_family TEXT,
+                entry_label TEXT,
+                entry_wallet TEXT,
+                entry_signature TEXT,
+                entry_price_usd REAL,
+                entry_liquidity_usd REAL,
+                entry_volume_h1 REAL,
+                entry_buys_h1 INTEGER,
+                entry_sells_h1 INTEGER,
+                peak_price_usd REAL,
+                last_price_usd REAL,
+                last_liquidity_usd REAL,
+                status TEXT,
+                exit_reason TEXT,
+                exit_signature TEXT,
+                exit_price_usd REAL,
+                pnl_pct REAL,
+                opened_at TEXT,
+                closed_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.commit()
+
+
+def get_open_paper_trade(mint: str) -> dict[str, Any] | None:
+    _ensure_paper_copy_table()
+
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM paper_copy_trades
+            WHERE mint = ?
+            AND status = 'OPEN'
+            """,
+            (mint,),
+        ).fetchone()
+
+        if not row:
+            return None
+
+        return dict(row)
+
+
+def list_open_paper_trades() -> list[dict[str, Any]]:
+    _ensure_paper_copy_table()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM paper_copy_trades
+            WHERE status = 'OPEN'
+            ORDER BY opened_at DESC
+            """
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+
+
+def _is_paper_entry_wallet(label: str) -> bool:
+    return any(keyword in label for keyword in PAPER_ENTRY_LABEL_KEYWORDS)
+
+
+def _is_paper_allowed_family(token_family: str | None) -> bool:
+    return bool(token_family and token_family in PAPER_ALLOWED_FAMILIES)
+
+
+def _paper_buy_sell_ratio(dex_info: dict[str, Any]) -> Decimal:
+    buys = Decimal(str(dex_info.get("buys_h1") or 0))
+    sells = Decimal(str(dex_info.get("sells_h1") or 0))
+
+    if sells <= 0:
+        return buys if buys > 0 else Decimal("0")
+
+    return buys / sells
+
+
+def _paper_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
+    price = dex_info.get("price_usd") or Decimal("0")
+    liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+    volume_h1 = dex_info.get("volume_h1") or Decimal("0")
+    ratio = _paper_buy_sell_ratio(dex_info)
+
+    if price <= 0:
+        return False, "Price is not available."
+
+    if liquidity < PAPER_MIN_LIQUIDITY_USD:
+        return False, f"Liquidity below {_fmt_usd(PAPER_MIN_LIQUIDITY_USD)}."
+
+    if volume_h1 < PAPER_MIN_VOLUME_H1_USD:
+        return False, f"Volume 1H below {_fmt_usd(PAPER_MIN_VOLUME_H1_USD)}."
+
+    if ratio < PAPER_MIN_BUY_SELL_RATIO:
+        return False, f"Buy/Sell ratio below {_fmt_decimal(PAPER_MIN_BUY_SELL_RATIO, 2)}x."
+
+    return True, "Entry quality passed."
+
+
+def open_paper_copy_trade(
+    mint: str,
+    label: str,
+    wallet_address: str,
+    signature: str,
+    analysis: dict[str, Any],
+    dex_info: dict[str, Any],
+) -> str:
+    _ensure_paper_copy_table()
+
+    now = _now_iso()
+    symbol = dex_info.get("symbol") or TOKEN_ALIASES.get(mint) or "UNKNOWN"
+    name = dex_info.get("name")
+    token_family = analysis.get("token_family") or token_family_for_mint(mint)
+    price = dex_info.get("price_usd") or Decimal("0")
+    liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+    volume_h1 = dex_info.get("volume_h1") or Decimal("0")
+    buys_h1 = int(dex_info.get("buys_h1") or 0)
+    sells_h1 = int(dex_info.get("sells_h1") or 0)
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO paper_copy_trades (
+                mint,
+                symbol,
+                name,
+                token_family,
+                entry_label,
+                entry_wallet,
+                entry_signature,
+                entry_price_usd,
+                entry_liquidity_usd,
+                entry_volume_h1,
+                entry_buys_h1,
+                entry_sells_h1,
+                peak_price_usd,
+                last_price_usd,
+                last_liquidity_usd,
+                status,
+                exit_reason,
+                exit_signature,
+                exit_price_usd,
+                pnl_pct,
+                opened_at,
+                closed_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(mint)
+            DO UPDATE SET
+                symbol = excluded.symbol,
+                name = excluded.name,
+                token_family = excluded.token_family,
+                entry_label = excluded.entry_label,
+                entry_wallet = excluded.entry_wallet,
+                entry_signature = excluded.entry_signature,
+                entry_price_usd = excluded.entry_price_usd,
+                entry_liquidity_usd = excluded.entry_liquidity_usd,
+                entry_volume_h1 = excluded.entry_volume_h1,
+                entry_buys_h1 = excluded.entry_buys_h1,
+                entry_sells_h1 = excluded.entry_sells_h1,
+                peak_price_usd = excluded.peak_price_usd,
+                last_price_usd = excluded.last_price_usd,
+                last_liquidity_usd = excluded.last_liquidity_usd,
+                status = 'OPEN',
+                exit_reason = '',
+                exit_signature = '',
+                exit_price_usd = 0,
+                pnl_pct = 0,
+                opened_at = excluded.opened_at,
+                closed_at = '',
+                updated_at = excluded.updated_at
+            """,
+            (
+                mint,
+                symbol,
+                name,
+                token_family,
+                label,
+                wallet_address,
+                signature,
+                _to_float(price),
+                _to_float(liquidity),
+                _to_float(volume_h1),
+                buys_h1,
+                sells_h1,
+                _to_float(price),
+                _to_float(price),
+                _to_float(liquidity),
+                "OPEN",
+                "",
+                "",
+                0,
+                0,
+                now,
+                "",
+                now,
+            ),
+        )
+        conn.commit()
+
+    return "\n".join(
+        [
+            "🟢 PAPER COPY ENTRY",
+            "",
+            f"Token: {symbol}",
+            f"Mint: {_short(mint)}",
+            f"Family: {token_family or 'N/A'}",
+            "",
+            f"Entry wallet: {label}",
+            f"Wallet: {_short(wallet_address)}",
+            f"Detected: {analysis.get('type', 'N/A')}",
+            "Reason: Early known cluster buyer pattern.",
+            "",
+            f"Entry price: {_fmt_usd(price)}",
+            f"Liquidity: {_fmt_usd(liquidity)}",
+            f"Volume 1H: {_fmt_usd(volume_h1)}",
+            f"Buys/Sells 1H: {buys_h1}/{sells_h1}",
+            f"Buy/Sell Ratio: {_fmt_decimal(_paper_buy_sell_ratio(dex_info), 2)}x",
+            "",
+            "DexScreener:",
+            dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
+            "",
+            "Mode: Paper only. No real buy was executed.",
+        ]
+    )
+
+
+def close_paper_copy_trade(
+    trade: dict[str, Any],
+    reason: str,
+    signature: str | None = None,
+    dex_info: dict[str, Any] | None = None,
+) -> str:
+    _ensure_paper_copy_table()
+
+    mint = trade["mint"]
+    now = _now_iso()
+
+    if dex_info is None:
+        dex_info = fetch_dex_token_info(mint) or {}
+
+    exit_price = dex_info.get("price_usd") or _to_decimal(trade.get("last_price_usd"))
+    entry_price = _to_decimal(trade.get("entry_price_usd"))
+
+    pnl_pct = Decimal("0")
+    if entry_price > 0:
+        pnl_pct = ((exit_price - entry_price) / entry_price) * Decimal("100")
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE paper_copy_trades
+            SET
+                status = 'CLOSED',
+                exit_reason = ?,
+                exit_signature = ?,
+                exit_price_usd = ?,
+                pnl_pct = ?,
+                closed_at = ?,
+                updated_at = ?
+            WHERE mint = ?
+            AND status = 'OPEN'
+            """,
+            (
+                reason,
+                signature or "",
+                _to_float(exit_price),
+                _to_float(pnl_pct),
+                now,
+                now,
+                mint,
+            ),
+        )
+        conn.commit()
+
+    symbol = trade.get("symbol") or dex_info.get("symbol") or TOKEN_ALIASES.get(mint) or "UNKNOWN"
+
+    return "\n".join(
+        [
+            "🚨 PAPER COPY EXIT",
+            "",
+            f"Token: {symbol}",
+            f"Mint: {_short(mint)}",
+            f"Reason: {reason}",
+            "",
+            f"Entry price: {_fmt_usd(entry_price)}",
+            f"Exit price: {_fmt_usd(exit_price)}",
+            f"Paper PnL: {_fmt_decimal(pnl_pct, 2)}%",
+            "",
+            "DexScreener:",
+            dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
+            "",
+            "Mode: Paper only. No real sell was executed.",
+        ]
+    )
+
+
+def update_paper_copy_market(trade: dict[str, Any], dex_info: dict[str, Any]) -> None:
+    mint = trade["mint"]
+    price = dex_info.get("price_usd") or Decimal("0")
+    liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+    old_peak = _to_decimal(trade.get("peak_price_usd"))
+    new_peak = max(old_peak, price)
+    now = _now_iso()
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE paper_copy_trades
+            SET
+                peak_price_usd = ?,
+                last_price_usd = ?,
+                last_liquidity_usd = ?,
+                updated_at = ?
+            WHERE mint = ?
+            AND status = 'OPEN'
+            """,
+            (
+                _to_float(new_peak),
+                _to_float(price),
+                _to_float(liquidity),
+                now,
+                mint,
+            ),
+        )
+        conn.commit()
+
+
+def maybe_handle_paper_copy_signal(
+    label: str,
+    wallet_address: str,
+    signature: str,
+    analysis: dict[str, Any],
+) -> list[str]:
+    if not PAPER_COPY_ENABLED:
+        return []
+
+    messages: list[str] = []
+
+    token_changes = analysis.get("token_changes") or []
+    mint = analysis.get("active_mint") or _primary_token_mint(token_changes)
+
+    if not mint:
+        return messages
+
+    analysis_type = analysis.get("type", "")
+    token_family = analysis.get("token_family") or token_family_for_mint(mint)
+    open_trade = get_open_paper_trade(mint)
+
+    # Exit rule 1: DHT8 transferred the same token out.
+    # This is the strongest pre-exit signal we discovered before GAMq sells.
+    if open_trade and label == "DHT8 Main" and "Distribution OUT" in analysis_type:
+        messages.append(
+            close_paper_copy_trade(
+                trade=open_trade,
+                reason="DHT8 transferred this token out. Possible DHT8 → GAMq exit route.",
+                signature=signature,
+            )
+        )
+        return messages
+
+    # Exit rule 2: GAMq sells or moves the same token.
+    if open_trade and "GAMq" in label and ("SELL" in analysis_type or "Distribution OUT" in analysis_type):
+        messages.append(
+            close_paper_copy_trade(
+                trade=open_trade,
+                reason="GAMq exit activity detected.",
+                signature=signature,
+            )
+        )
+        return messages
+
+    if open_trade:
+        return messages
+
+    # Entry rule: only known early-buyer wallets / G8R7 for now.
+    # Unknown early buyer discovery comes later with a scanner.
+    if not _is_paper_entry_wallet(label):
+        return messages
+
+    if "BUY" not in analysis_type:
+        return messages
+
+    if not _is_paper_allowed_family(token_family):
+        return messages
+
+    dex_info = fetch_dex_token_info(mint)
+    if not dex_info:
+        return messages
+
+    passed, _reason = _paper_entry_quality(dex_info)
+    if not passed:
+        return messages
+
+    messages.append(
+        open_paper_copy_trade(
+            mint=mint,
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis={**analysis, "token_family": token_family},
+            dex_info=dex_info,
+        )
+    )
+
+    return messages
+
+
+def monitor_paper_copy_trades() -> list[str]:
+    if not PAPER_COPY_ENABLED:
+        return []
+
+    messages: list[str] = []
+
+    for trade in list_open_paper_trades():
+        mint = trade["mint"]
+        dex_info = fetch_dex_token_info(mint)
+
+        if not dex_info:
+            continue
+
+        price = dex_info.get("price_usd") or Decimal("0")
+        liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+        entry_price = _to_decimal(trade.get("entry_price_usd"))
+        entry_liquidity = _to_decimal(trade.get("entry_liquidity_usd"))
+        peak_price = max(_to_decimal(trade.get("peak_price_usd")), price)
+
+        update_paper_copy_market(trade, dex_info)
+
+        if liquidity <= PAPER_LIQUIDITY_RUG_USD:
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason="Liquidity Rug detected.",
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
+        if entry_liquidity > 0 and liquidity <= entry_liquidity * (Decimal("1") - PAPER_LIQUIDITY_DROP_PCT):
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason="Liquidity dropped more than 70% from entry.",
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
+        if entry_price > 0 and price <= entry_price * (Decimal("1") - PAPER_STOP_LOSS_PCT):
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason="Stop loss: price dropped 25% from entry.",
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
+        if peak_price > entry_price and price <= peak_price * (Decimal("1") - PAPER_TRAILING_DROP_PCT):
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason="Trailing stop: price dropped 30% from peak.",
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
+    return messages
+
 def _format_token_changes(token_changes: list[dict[str, Any]]) -> list[str]:
     if not token_changes:
         return ["Token changes: N/A"]
@@ -1126,7 +1639,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.2",
+        f"{analysis['emoji']} Wallet Watch V4.3",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -1463,7 +1976,21 @@ async def run_wallet_watch_cycle(context) -> None:
                         analysis=analysis,
                     )
 
+                    paper_messages = maybe_handle_paper_copy_signal(
+                        label=label,
+                        wallet_address=wallet_address,
+                        signature=signature,
+                        analysis=analysis,
+                    )
+
                     if chat_id:
+                        for paper_message in paper_messages:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=paper_message,
+                                disable_web_page_preview=True,
+                            )
+
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text=build_wallet_activity_summary(
@@ -1525,7 +2052,21 @@ async def run_wallet_watch_cycle(context) -> None:
                 analysis=important_analysis,
             )
 
+            paper_messages = maybe_handle_paper_copy_signal(
+                label=label,
+                wallet_address=wallet_address,
+                signature=important_signature,
+                analysis=important_analysis,
+            )
+
             if chat_id:
+                for paper_message in paper_messages:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=paper_message,
+                        disable_web_page_preview=True,
+                    )
+
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=build_wallet_activity_summary(
@@ -1551,5 +2092,12 @@ async def run_wallet_watch_cycle(context) -> None:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=alert,
+                disable_web_page_preview=True,
+            )
+
+        for paper_message in monitor_paper_copy_trades():
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=paper_message,
                 disable_web_page_preview=True,
             )
