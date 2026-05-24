@@ -100,7 +100,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.4
+# Paper Copy Mode V4.5
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -123,7 +123,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.4
+# Critical First Init Mode V4.5
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -137,6 +137,13 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "6g4v Initial Buyer",
     "5syp Initial Buyer",
 )
+
+# New Mint Watch V4.5
+# DHT8 Distribution IN is not an entry by itself.
+# It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
+NEW_MINT_WATCH_ENABLED = True
+NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
+
 
 
 def _now_iso() -> str:
@@ -1140,7 +1147,218 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.4
+# New Mint Watch V4.5
+# ---------------------------------------------------------------------------
+
+def _ensure_new_mint_watch_table() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS new_mint_watch (
+                mint TEXT PRIMARY KEY,
+                symbol TEXT,
+                name TEXT,
+                token_family TEXT,
+                source_label TEXT,
+                source_wallet TEXT,
+                source_signature TEXT,
+                status TEXT,
+                first_seen_at TEXT,
+                last_checked_at TEXT,
+                last_alert TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.commit()
+
+
+def get_new_mint_watch(mint: str) -> dict[str, Any] | None:
+    _ensure_new_mint_watch_table()
+
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM new_mint_watch
+            WHERE mint = ?
+            """,
+            (mint,),
+        ).fetchone()
+
+        if not row:
+            return None
+
+        return dict(row)
+
+
+def save_new_mint_watch(
+    mint: str,
+    label: str,
+    wallet_address: str,
+    signature: str,
+    token_family: str | None,
+    dex_info: dict[str, Any] | None = None,
+) -> bool:
+    if not mint:
+        return False
+
+    existing = get_new_mint_watch(mint)
+    if existing:
+        return False
+
+    if dex_info is None:
+        dex_info = fetch_dex_token_info(mint) or {}
+
+    now = _now_iso()
+    symbol = dex_info.get("symbol") or TOKEN_ALIASES.get(mint)
+    name = dex_info.get("name")
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO new_mint_watch (
+                mint,
+                symbol,
+                name,
+                token_family,
+                source_label,
+                source_wallet,
+                source_signature,
+                status,
+                first_seen_at,
+                last_checked_at,
+                last_alert,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mint,
+                symbol,
+                name,
+                token_family,
+                label,
+                wallet_address,
+                signature,
+                "WATCHING",
+                now,
+                now,
+                "NEW_MINT_WATCH",
+                now,
+            ),
+        )
+        conn.commit()
+
+    return True
+
+
+def build_new_mint_watch_message(
+    mint: str,
+    label: str,
+    wallet_address: str,
+    signature: str,
+    analysis: dict[str, Any],
+    dex_info: dict[str, Any] | None = None,
+) -> str:
+    if dex_info is None:
+        dex_info = fetch_dex_token_info(mint) or {}
+
+    symbol = dex_info.get("symbol") or TOKEN_ALIASES.get(mint) or _token_label(mint)
+    token_family = analysis.get("token_family") or token_family_for_mint(mint)
+    price = dex_info.get("price_usd") or Decimal("0")
+    liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+    volume_h1 = dex_info.get("volume_h1") or Decimal("0")
+    buys_h1 = int(dex_info.get("buys_h1") or 0)
+    sells_h1 = int(dex_info.get("sells_h1") or 0)
+
+    return "\n".join(
+        [
+            "👀 NEW MINT WATCH V4.5",
+            "",
+            f"Token: {symbol}",
+            f"Mint: {_short(mint)}",
+            f"Family: {token_family or 'N/A'}",
+            "",
+            f"Source: {label}",
+            f"Wallet: {_short(wallet_address)}",
+            f"Detected: {analysis.get('type', 'N/A')}",
+            "Reason: DHT8 received a new mint allocation. This is WATCH only, not entry.",
+            "",
+            f"Price: {_fmt_usd(price)}",
+            f"Liquidity: {_fmt_usd(liquidity)}",
+            f"Volume 1H: {_fmt_usd(volume_h1)}",
+            f"Buys/Sells 1H: {buys_h1}/{sells_h1}",
+            "",
+            "Next trigger needed for Paper Entry:",
+            "6g4v / 5syp / JBS2 / A4tT / G8R7 Big BUY on this mint.",
+            "",
+            "Exit danger:",
+            "DHT8 → GAMq or GAMq SELL.",
+            "",
+            "DexScreener:",
+            dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
+            "",
+            f"Tx: https://solscan.io/tx/{signature}",
+            "",
+            "Mode: Watch only. No Paper entry yet. No real buy.",
+        ]
+    )
+
+
+def maybe_handle_new_mint_watch_signal(
+    label: str,
+    wallet_address: str,
+    signature: str,
+    analysis: dict[str, Any],
+) -> list[str]:
+    if not NEW_MINT_WATCH_ENABLED:
+        return []
+
+    token_changes = analysis.get("token_changes") or []
+    mint = analysis.get("active_mint") or _primary_token_mint(token_changes)
+    if not mint:
+        return []
+
+    analysis_type = analysis.get("type", "")
+    token_family = analysis.get("token_family") or token_family_for_mint(mint)
+
+    if label != "DHT8 Main":
+        return []
+
+    if "Distribution IN" not in analysis_type:
+        return []
+
+    if token_family not in NEW_MINT_WATCH_FAMILIES:
+        return []
+
+    dex_info = fetch_dex_token_info(mint) or {}
+    created = save_new_mint_watch(
+        mint=mint,
+        label=label,
+        wallet_address=wallet_address,
+        signature=signature,
+        token_family=token_family,
+        dex_info=dex_info,
+    )
+
+    if not created:
+        return []
+
+    return [
+        build_new_mint_watch_message(
+            mint=mint,
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis={**analysis, "token_family": token_family},
+            dex_info=dex_info,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Paper Copy Mode V4.5
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1366,7 +1584,7 @@ def open_paper_copy_trade(
             f"Entry wallet: {label}",
             f"Wallet: {_short(wallet_address)}",
             f"Detected: {analysis.get('type', 'N/A')}",
-            "Reason: Early known cluster buyer pattern.",
+            f"Reason: {analysis.get('paper_reason', 'Early known cluster buyer pattern.')}",
             "",
             f"Entry price: {_fmt_usd(price)}",
             f"Liquidity: {_fmt_usd(liquidity)}",
@@ -1502,6 +1720,17 @@ def maybe_handle_paper_copy_signal(
 
     analysis_type = analysis.get("type", "")
     token_family = analysis.get("token_family") or token_family_for_mint(mint)
+
+    # New Mint Watch: DHT8 Distribution IN is watch-only, not entry.
+    messages.extend(
+        maybe_handle_new_mint_watch_signal(
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis={**analysis, "token_family": token_family},
+        )
+    )
+
     open_trade = get_open_paper_trade(mint)
 
     # Exit rule 1: DHT8 transferred the same token out.
@@ -1549,13 +1778,18 @@ def maybe_handle_paper_copy_signal(
     if not passed:
         return messages
 
+    watched_mint = get_new_mint_watch(mint)
+    paper_reason = "Early known cluster buyer pattern."
+    if watched_mint:
+        paper_reason = "DHT8 New Mint Watch confirmed by early buyer."
+
     messages.append(
         open_paper_copy_trade(
             mint=mint,
             label=label,
             wallet_address=wallet_address,
             signature=signature,
-            analysis={**analysis, "token_family": token_family},
+            analysis={**analysis, "token_family": token_family, "paper_reason": paper_reason},
             dex_info=dex_info,
         )
     )
@@ -1670,7 +1904,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.4",
+        f"{analysis['emoji']} Wallet Watch V4.5",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
