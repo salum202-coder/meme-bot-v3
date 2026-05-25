@@ -100,7 +100,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.8
+# Paper Copy Mode V4.9
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -123,7 +123,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.8
+# Critical First Init Mode V4.9
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -138,13 +138,13 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "5syp Initial Buyer",
 )
 
-# New Mint Watch V4.8
+# New Mint Watch V4.9
 # DHT8 Distribution IN is not an entry by itself.
 # It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
 NEW_MINT_WATCH_ENABLED = True
 NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
 
-# New Mint Metrics Entry V4.8
+# New Mint Metrics Entry V4.9
 # If DHT8 receives a new mint and the token quickly shows strong DexScreener metrics,
 # open a PAPER trade even if the early buyer wallet is unknown.
 NEW_MINT_METRICS_ENTRY_ENABLED = True
@@ -154,7 +154,7 @@ NEW_MINT_METRICS_MIN_VOLUME_H1_USD = Decimal("50000")
 NEW_MINT_METRICS_MIN_BUYS_H1 = 20
 NEW_MINT_METRICS_MIN_BUY_SELL_RATIO = Decimal("1.20")
 
-# Behavior-Based Detection V4.8
+# Behavior-Based Detection V4.9
 # Do not depend only on names like SPCX / SLX.
 # If DHT8 receives a large allocation and Dex metrics are strong, treat it as a behavior rotation candidate.
 BEHAVIOR_ROTATION_FAMILY = "DHT8 Rotation / Behavior"
@@ -164,13 +164,19 @@ BEHAVIOR_MIN_VOLUME_H1_USD = Decimal("70000")
 BEHAVIOR_MIN_BUYS_H1 = 20
 BEHAVIOR_MIN_BUY_SELL_RATIO = Decimal("1.50")
 
-# Paper profit management V4.8
+# Paper profit management V4.9
 # This is Paper-only partial profit accounting. No real orders are sent.
 PAPER_TP1_PCT = Decimal("50")
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
 PAPER_AFTER_TP1_PROFIT_LOCK_PCT = Decimal("0.10")
 PAPER_TRAILING_AFTER_TP1_DROP_PCT = Decimal("0.20")
 DHT8_EXIT_SYNC_SIGNATURE_LIMIT = 25
+
+# Paper Copy Wallet Accounting V4.9
+# Separate from the original /wallet paper system.
+# Each Paper Copy entry is counted as a fixed notional test trade.
+PAPER_COPY_WALLET_STARTING_BALANCE_USD = Decimal("10.00")
+PAPER_COPY_TRADE_SIZE_USD = Decimal("1.00")
 
 
 def _now_iso() -> str:
@@ -1263,7 +1269,7 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# New Mint Watch V4.8
+# New Mint Watch V4.9
 # ---------------------------------------------------------------------------
 
 def _ensure_new_mint_watch_table() -> None:
@@ -1450,7 +1456,7 @@ def build_new_mint_watch_message(
 
     return "\n".join(
         [
-            "👀 NEW MINT WATCH V4.8",
+            "👀 NEW MINT WATCH V4.9",
             "",
             f"Token: {symbol}",
             f"Mint: {_short(mint)}",
@@ -1505,7 +1511,7 @@ def maybe_handle_new_mint_watch_signal(
     if "Distribution IN" not in analysis_type:
         return []
 
-    # V4.8: names can change. If token family is unknown but DHT8 received
+    # V4.9: names can change. If token family is unknown but DHT8 received
     # a large allocation, treat it as a behavior-based rotation candidate.
     primary_amount = Decimal("0")
     positive_tokens = [x for x in token_changes if x.get("delta", Decimal("0")) > 0]
@@ -1547,7 +1553,7 @@ def maybe_handle_new_mint_watch_signal(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.8
+# Paper Copy Mode V4.9
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1583,7 +1589,7 @@ def _ensure_paper_copy_table() -> None:
             """
         )
 
-        # V4.8 migration columns for partial TP accounting.
+        # V4.9 migration columns for partial TP accounting.
         for column_name, column_type in [
             ("tp1_done", "INTEGER DEFAULT 0"),
             ("tp1_price_usd", "REAL DEFAULT 0"),
@@ -1648,6 +1654,22 @@ def list_closed_paper_trades(limit: int = 10) -> list[dict[str, Any]]:
             LIMIT ?
             """,
             (limit,),
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+
+
+def list_all_paper_copy_trades() -> list[dict[str, Any]]:
+    _ensure_paper_copy_table()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM paper_copy_trades
+            WHERE status IN ('OPEN', 'CLOSED')
+            ORDER BY opened_at ASC
+            """
         ).fetchall()
 
         return [dict(row) for row in rows]
@@ -2357,7 +2379,7 @@ def monitor_paper_copy_trades() -> list[str]:
     for trade in list_open_paper_trades():
         mint = trade["mint"]
 
-        # V4.8 DHT8 OUT Sync:
+        # V4.9 DHT8 OUT Sync:
         # If the normal wallet-watch notification missed the DHT8 OUT, scan recent DHT8 txs
         # before any price/liquidity-based exits. This prevents holding until a late rug exit.
         recent_exit = find_recent_dht8_out_for_trade(trade)
@@ -2393,7 +2415,7 @@ def monitor_paper_copy_trades() -> list[str]:
 
         tp1_done = bool(int(trade.get("tp1_done") or 0))
 
-        # V4.8 TP1: lock part of the profit while keeping the remaining paper position open.
+        # V4.9 TP1: lock part of the profit while keeping the remaining paper position open.
         if not tp1_done and pnl_pct >= PAPER_TP1_PCT:
             messages.append(mark_paper_copy_tp1(trade, dex_info))
             refreshed_trade = get_open_paper_trade(mint)
@@ -2480,7 +2502,7 @@ def build_fast_kill_cycle_message(
     symbol = watched.get("symbol") or TOKEN_ALIASES.get(mint) or _token_label(mint)
 
     lines = [
-        "⚡ FAST KILL CYCLE V4.8",
+        "⚡ FAST KILL CYCLE V4.9",
         "",
         f"Token: {symbol}",
         f"Mint: {_short(mint)}",
@@ -2633,6 +2655,127 @@ def build_copy_trades_message(limit: int = 10) -> str:
     return "\n".join(lines).strip()
 
 
+
+def _fmt_signed_usd(value: Decimal | float | int | None) -> str:
+    amount = _to_decimal(value)
+    sign = "+" if amount > 0 else ""
+    return f"{sign}${float(amount):,.2f}"
+
+
+def _paper_copy_wallet_open_components(trade: dict[str, Any]) -> dict[str, Any]:
+    snap = _paper_trade_runtime_snapshot(trade)
+    trade_size = PAPER_COPY_TRADE_SIZE_USD
+    current_pnl_pct = snap["pnl_pct"]
+
+    tp1_done = bool(int(trade.get("tp1_done") or 0))
+    tp1_closed_pct = _to_decimal(trade.get("tp1_closed_pct"))
+    tp1_pnl_pct = _to_decimal(trade.get("tp1_pnl_pct"))
+
+    closed_weight = Decimal("0")
+    if tp1_done and tp1_closed_pct > 0:
+        closed_weight = tp1_closed_pct / Decimal("100")
+
+    remaining_weight = max(Decimal("0"), Decimal("1") - closed_weight)
+
+    tp1_realized_usd = trade_size * closed_weight * (tp1_pnl_pct / Decimal("100"))
+    remaining_unrealized_usd = trade_size * remaining_weight * (current_pnl_pct / Decimal("100"))
+    allocated_usd = trade_size * remaining_weight
+
+    return {
+        "snap": snap,
+        "trade_size": trade_size,
+        "tp1_realized_usd": tp1_realized_usd,
+        "unrealized_usd": remaining_unrealized_usd,
+        "allocated_usd": allocated_usd,
+        "remaining_weight": remaining_weight,
+        "current_pnl_pct": current_pnl_pct,
+    }
+
+
+def _paper_copy_wallet_closed_realized_usd(trade: dict[str, Any]) -> Decimal:
+    # Closed pnl_pct is already effective if TP1 happened before final exit.
+    pnl_pct = _to_decimal(trade.get("pnl_pct"))
+    return PAPER_COPY_TRADE_SIZE_USD * (pnl_pct / Decimal("100"))
+
+
+def build_copy_wallet_message() -> str:
+    _ensure_paper_copy_table()
+
+    trades = list_all_paper_copy_trades()
+    open_trades = [trade for trade in trades if trade.get("status") == "OPEN"]
+    closed_trades = [trade for trade in trades if trade.get("status") == "CLOSED"]
+
+    closed_realized_usd = sum(
+        (_paper_copy_wallet_closed_realized_usd(trade) for trade in closed_trades),
+        Decimal("0"),
+    )
+
+    open_tp1_realized_usd = Decimal("0")
+    open_unrealized_usd = Decimal("0")
+    allocated_usd = Decimal("0")
+    open_lines: list[str] = []
+
+    for index, trade in enumerate(open_trades, start=1):
+        components = _paper_copy_wallet_open_components(trade)
+        snap = components["snap"]
+        open_tp1_realized_usd += components["tp1_realized_usd"]
+        open_unrealized_usd += components["unrealized_usd"]
+        allocated_usd += components["allocated_usd"]
+
+        symbol = trade.get("symbol") or (snap.get("dex_info") or {}).get("symbol") or "UNKNOWN"
+        mint = trade.get("mint")
+        tp1_text = "DONE" if int(trade.get("tp1_done") or 0) else "NO"
+
+        open_lines.extend(
+            [
+                f"{index}) {symbol} | {_short(mint)}",
+                f"Position size: {_fmt_usd(PAPER_COPY_TRADE_SIZE_USD)} paper",
+                f"Remaining allocated: {_fmt_usd(components['allocated_usd'])}",
+                f"Current PnL: {_fmt_decimal(components['current_pnl_pct'], 2)}%",
+                f"TP1: {tp1_text}",
+                f"Realized from TP1: {_fmt_signed_usd(components['tp1_realized_usd'])}",
+                f"Unrealized: {_fmt_signed_usd(components['unrealized_usd'])}",
+                "",
+            ]
+        )
+
+    realized_usd = closed_realized_usd + open_tp1_realized_usd
+    estimated_balance = PAPER_COPY_WALLET_STARTING_BALANCE_USD + realized_usd + open_unrealized_usd
+    free_cash = PAPER_COPY_WALLET_STARTING_BALANCE_USD + realized_usd - allocated_usd
+    if free_cash < 0:
+        free_cash = Decimal("0")
+
+    total_pnl_usd = estimated_balance - PAPER_COPY_WALLET_STARTING_BALANCE_USD
+    total_pnl_pct = Decimal("0")
+    if PAPER_COPY_WALLET_STARTING_BALANCE_USD > 0:
+        total_pnl_pct = (total_pnl_usd / PAPER_COPY_WALLET_STARTING_BALANCE_USD) * Decimal("100")
+
+    lines = [
+        "💼 Paper Copy Wallet V4.9",
+        "",
+        f"Starting Balance: {_fmt_usd(PAPER_COPY_WALLET_STARTING_BALANCE_USD)}",
+        f"Paper Trade Size: {_fmt_usd(PAPER_COPY_TRADE_SIZE_USD)} each",
+        f"Open Positions: {len(open_trades)}",
+        f"Closed Trades: {len(closed_trades)}",
+        "",
+        f"Realized PnL: {_fmt_signed_usd(realized_usd)}",
+        f"Unrealized PnL: {_fmt_signed_usd(open_unrealized_usd)}",
+        f"Total PnL: {_fmt_signed_usd(total_pnl_usd)} ({_fmt_decimal(total_pnl_pct, 2)}%)",
+        "",
+        f"Estimated Balance: {_fmt_usd(estimated_balance)}",
+        f"Allocated: {_fmt_usd(allocated_usd)}",
+        f"Free Cash: {_fmt_usd(free_cash)}",
+        "",
+        "Mode: Paper only. This is separate from the old /wallet system.",
+    ]
+
+    if open_lines:
+        lines.extend(["", "Open position accounting:", ""])
+        lines.extend(open_lines)
+
+    return "\n".join(lines).strip()
+
+
 def _format_token_changes(token_changes: list[dict[str, Any]]) -> list[str]:
     if not token_changes:
         return ["Token changes: N/A"]
@@ -2677,7 +2820,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.8",
+        f"{analysis['emoji']} Wallet Watch V4.9",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
