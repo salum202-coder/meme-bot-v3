@@ -8,8 +8,9 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["📊 Status", "🧾 30m Digest"],
         ["🕵️ Cluster", "📋 Copy Positions"],
-        ["📜 Copy Trades", "📈 Trades"],
-        ["📌 Positions", "💼 Wallet"],
+        ["📜 Copy Trades", "💼 Copy Wallet"],
+        ["📈 Trades", "📌 Positions"],
+        ["💼 Wallet"],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -33,6 +34,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/digest - Last 30m wallet digest\n"
         "/copy_positions - Open Paper Copy positions\n"
         "/copy_trades - Closed Paper Copy trades\n"
+        "/copy_wallet - Paper Copy wallet accounting\n"
         "/positions - Open original paper trades\n"
         "/trades - Last original closed trades\n"
         "/wallet - Paper wallet summary"
