@@ -4,7 +4,11 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from telegram_bot.handlers_status import status_handler
-from telegram_bot.handlers_wallet_watch import cluster_handler
+from telegram_bot.handlers_wallet_watch import (
+    cluster_handler,
+    copy_positions_handler,
+    copy_trades_handler,
+)
 from telegram_bot.handlers_trades import trades_handler
 from telegram_bot.handlers_positions import positions_handler
 from telegram_bot.handlers_wallet import wallet_handler
@@ -24,6 +28,14 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if text == "🕵️ Cluster":
         await cluster_handler(update, context)
+        return
+
+    if text == "📋 Copy Positions":
+        await copy_positions_handler(update, context)
+        return
+
+    if text == "📜 Copy Trades":
+        await copy_trades_handler(update, context)
         return
 
     if text == "📈 Trades":
