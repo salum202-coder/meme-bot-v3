@@ -100,7 +100,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.7
+# Paper Copy Mode V4.8
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -123,7 +123,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.7
+# Critical First Init Mode V4.8
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -138,13 +138,13 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "5syp Initial Buyer",
 )
 
-# New Mint Watch V4.7
+# New Mint Watch V4.8
 # DHT8 Distribution IN is not an entry by itself.
 # It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
 NEW_MINT_WATCH_ENABLED = True
 NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
 
-# New Mint Metrics Entry V4.7
+# New Mint Metrics Entry V4.8
 # If DHT8 receives a new mint and the token quickly shows strong DexScreener metrics,
 # open a PAPER trade even if the early buyer wallet is unknown.
 NEW_MINT_METRICS_ENTRY_ENABLED = True
@@ -153,6 +153,24 @@ NEW_MINT_METRICS_MIN_LIQUIDITY_USD = Decimal("80000")
 NEW_MINT_METRICS_MIN_VOLUME_H1_USD = Decimal("50000")
 NEW_MINT_METRICS_MIN_BUYS_H1 = 20
 NEW_MINT_METRICS_MIN_BUY_SELL_RATIO = Decimal("1.20")
+
+# Behavior-Based Detection V4.8
+# Do not depend only on names like SPCX / SLX.
+# If DHT8 receives a large allocation and Dex metrics are strong, treat it as a behavior rotation candidate.
+BEHAVIOR_ROTATION_FAMILY = "DHT8 Rotation / Behavior"
+BEHAVIOR_DHT8_MIN_TOKEN_AMOUNT = Decimal("700000000")
+BEHAVIOR_MIN_LIQUIDITY_USD = Decimal("100000")
+BEHAVIOR_MIN_VOLUME_H1_USD = Decimal("70000")
+BEHAVIOR_MIN_BUYS_H1 = 20
+BEHAVIOR_MIN_BUY_SELL_RATIO = Decimal("1.50")
+
+# Paper profit management V4.8
+# This is Paper-only partial profit accounting. No real orders are sent.
+PAPER_TP1_PCT = Decimal("50")
+PAPER_TP1_CLOSE_PERCENT = Decimal("50")
+PAPER_AFTER_TP1_PROFIT_LOCK_PCT = Decimal("0.10")
+PAPER_TRAILING_AFTER_TP1_DROP_PCT = Decimal("0.20")
+DHT8_EXIT_SYNC_SIGNATURE_LIMIT = 25
 
 
 def _now_iso() -> str:
@@ -1245,7 +1263,7 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# New Mint Watch V4.7
+# New Mint Watch V4.8
 # ---------------------------------------------------------------------------
 
 def _ensure_new_mint_watch_table() -> None:
@@ -1432,7 +1450,7 @@ def build_new_mint_watch_message(
 
     return "\n".join(
         [
-            "👀 NEW MINT WATCH V4.7",
+            "👀 NEW MINT WATCH V4.8",
             "",
             f"Token: {symbol}",
             f"Mint: {_short(mint)}",
@@ -1487,8 +1505,21 @@ def maybe_handle_new_mint_watch_signal(
     if "Distribution IN" not in analysis_type:
         return []
 
-    if token_family not in NEW_MINT_WATCH_FAMILIES:
+    # V4.8: names can change. If token family is unknown but DHT8 received
+    # a large allocation, treat it as a behavior-based rotation candidate.
+    primary_amount = Decimal("0")
+    positive_tokens = [x for x in token_changes if x.get("delta", Decimal("0")) > 0]
+    if positive_tokens:
+        primary_amount = positive_tokens[0].get("delta") or Decimal("0")
+
+    is_known_family = token_family in NEW_MINT_WATCH_FAMILIES
+    is_behavior_rotation = primary_amount >= BEHAVIOR_DHT8_MIN_TOKEN_AMOUNT
+
+    if not is_known_family and not is_behavior_rotation:
         return []
+
+    if not token_family and is_behavior_rotation:
+        token_family = BEHAVIOR_ROTATION_FAMILY
 
     dex_info = fetch_dex_token_info(mint) or {}
     created = save_new_mint_watch(
@@ -1516,7 +1547,7 @@ def maybe_handle_new_mint_watch_signal(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.7
+# Paper Copy Mode V4.8
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1551,6 +1582,20 @@ def _ensure_paper_copy_table() -> None:
             )
             """
         )
+
+        # V4.8 migration columns for partial TP accounting.
+        for column_name, column_type in [
+            ("tp1_done", "INTEGER DEFAULT 0"),
+            ("tp1_price_usd", "REAL DEFAULT 0"),
+            ("tp1_pnl_pct", "REAL DEFAULT 0"),
+            ("tp1_closed_pct", "REAL DEFAULT 0"),
+            ("tp1_at", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE paper_copy_trades ADD COLUMN {column_name} {column_type}")
+            except Exception:
+                pass
+
         conn.commit()
 
 
@@ -1635,6 +1680,10 @@ def _is_paper_entry_wallet(label: str) -> bool:
 
 def _is_paper_allowed_family(token_family: str | None) -> bool:
     return bool(token_family and token_family in PAPER_ALLOWED_FAMILIES)
+
+
+def _is_behavior_rotation_family(token_family: str | None) -> bool:
+    return token_family == BEHAVIOR_ROTATION_FAMILY
 
 
 def _paper_buy_sell_ratio(dex_info: dict[str, Any]) -> Decimal:
@@ -1768,6 +1817,20 @@ def open_paper_copy_trade(
                 now,
             ),
         )
+        conn.execute(
+            """
+            UPDATE paper_copy_trades
+            SET
+                tp1_done = 0,
+                tp1_price_usd = 0,
+                tp1_pnl_pct = 0,
+                tp1_closed_pct = 0,
+                tp1_at = ''
+            WHERE mint = ?
+            AND status = 'OPEN'
+            """,
+            (mint,),
+        )
         conn.commit()
 
     return "\n".join(
@@ -1814,9 +1877,19 @@ def close_paper_copy_trade(
     exit_price = dex_info.get("price_usd") or _to_decimal(trade.get("last_price_usd"))
     entry_price = _to_decimal(trade.get("entry_price_usd"))
 
-    pnl_pct = Decimal("0")
+    remaining_pnl_pct = Decimal("0")
     if entry_price > 0:
-        pnl_pct = ((exit_price - entry_price) / entry_price) * Decimal("100")
+        remaining_pnl_pct = ((exit_price - entry_price) / entry_price) * Decimal("100")
+
+    tp1_done = bool(int(trade.get("tp1_done") or 0))
+    tp1_closed_pct = _to_decimal(trade.get("tp1_closed_pct"))
+    tp1_pnl_pct = _to_decimal(trade.get("tp1_pnl_pct"))
+
+    effective_pnl_pct = remaining_pnl_pct
+    if tp1_done and tp1_closed_pct > 0:
+        closed_weight = tp1_closed_pct / Decimal("100")
+        remaining_weight = Decimal("1") - closed_weight
+        effective_pnl_pct = (tp1_pnl_pct * closed_weight) + (remaining_pnl_pct * remaining_weight)
 
     with get_conn() as conn:
         conn.execute(
@@ -1837,7 +1910,7 @@ def close_paper_copy_trade(
                 reason,
                 signature or "",
                 _to_float(exit_price),
-                _to_float(pnl_pct),
+                _to_float(effective_pnl_pct),
                 now,
                 now,
                 mint,
@@ -1847,17 +1920,31 @@ def close_paper_copy_trade(
 
     symbol = trade.get("symbol") or dex_info.get("symbol") or TOKEN_ALIASES.get(mint) or "UNKNOWN"
 
-    return "\n".join(
+    lines = [
+        "🚨 PAPER COPY EXIT",
+        "",
+        f"Token: {symbol}",
+        f"Mint: {_short(mint)}",
+        f"Reason: {reason}",
+        "",
+        f"Entry price: {_fmt_price(entry_price)}",
+        f"Exit price: {_fmt_price(exit_price)}",
+    ]
+
+    if tp1_done and tp1_closed_pct > 0:
+        lines.extend(
+            [
+                f"TP1: {_fmt_decimal(tp1_closed_pct, 0)}% closed at {_fmt_price(_to_decimal(trade.get('tp1_price_usd')))}",
+                f"TP1 PnL: {_fmt_decimal(tp1_pnl_pct, 2)}%",
+                f"Remaining PnL: {_fmt_decimal(remaining_pnl_pct, 2)}%",
+                f"Effective Paper PnL: {_fmt_decimal(effective_pnl_pct, 2)}%",
+            ]
+        )
+    else:
+        lines.append(f"Paper PnL: {_fmt_decimal(effective_pnl_pct, 2)}%")
+
+    lines.extend(
         [
-            "🚨 PAPER COPY EXIT",
-            "",
-            f"Token: {symbol}",
-            f"Mint: {_short(mint)}",
-            f"Reason: {reason}",
-            "",
-            f"Entry price: {_fmt_price(entry_price)}",
-            f"Exit price: {_fmt_price(exit_price)}",
-            f"Paper PnL: {_fmt_decimal(pnl_pct, 2)}%",
             "",
             "DexScreener:",
             dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
@@ -1865,6 +1952,8 @@ def close_paper_copy_trade(
             "Mode: Paper only. No real sell was executed.",
         ]
     )
+
+    return "\n".join(lines)
 
 
 def update_paper_copy_market(trade: dict[str, Any], dex_info: dict[str, Any]) -> None:
@@ -1896,6 +1985,116 @@ def update_paper_copy_market(trade: dict[str, Any], dex_info: dict[str, Any]) ->
             ),
         )
         conn.commit()
+
+
+
+def mark_paper_copy_tp1(
+    trade: dict[str, Any],
+    dex_info: dict[str, Any],
+) -> str:
+    _ensure_paper_copy_table()
+
+    mint = trade["mint"]
+    now = _now_iso()
+    symbol = trade.get("symbol") or dex_info.get("symbol") or TOKEN_ALIASES.get(mint) or "UNKNOWN"
+    entry_price = _to_decimal(trade.get("entry_price_usd"))
+    tp1_price = dex_info.get("price_usd") or _to_decimal(trade.get("last_price_usd"))
+    liquidity = dex_info.get("liquidity_usd") or _to_decimal(trade.get("last_liquidity_usd"))
+
+    tp1_pnl_pct = Decimal("0")
+    if entry_price > 0:
+        tp1_pnl_pct = ((tp1_price - entry_price) / entry_price) * Decimal("100")
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE paper_copy_trades
+            SET
+                tp1_done = 1,
+                tp1_price_usd = ?,
+                tp1_pnl_pct = ?,
+                tp1_closed_pct = ?,
+                tp1_at = ?,
+                last_price_usd = ?,
+                last_liquidity_usd = ?,
+                peak_price_usd = MAX(peak_price_usd, ?),
+                updated_at = ?
+            WHERE mint = ?
+            AND status = 'OPEN'
+            AND COALESCE(tp1_done, 0) = 0
+            """,
+            (
+                _to_float(tp1_price),
+                _to_float(tp1_pnl_pct),
+                _to_float(PAPER_TP1_CLOSE_PERCENT),
+                now,
+                _to_float(tp1_price),
+                _to_float(liquidity),
+                _to_float(tp1_price),
+                now,
+                mint,
+            ),
+        )
+        conn.commit()
+
+    return "\n".join(
+        [
+            "✅ PAPER COPY TP1",
+            "",
+            f"Token: {symbol}",
+            f"Mint: {_short(mint)}",
+            f"Action: Paper partial take profit.",
+            "",
+            f"TP1 close: {_fmt_decimal(PAPER_TP1_CLOSE_PERCENT, 0)}%",
+            f"Entry price: {_fmt_price(entry_price)}",
+            f"TP1 price: {_fmt_price(tp1_price)}",
+            f"TP1 PnL: {_fmt_decimal(tp1_pnl_pct, 2)}%",
+            f"Liquidity: {_fmt_usd(liquidity)}",
+            "",
+            "Remaining position protection:",
+            f"Profit lock: +{_fmt_decimal(PAPER_AFTER_TP1_PROFIT_LOCK_PCT * Decimal('100'), 0)}% area",
+            f"Trailing after TP1: {_fmt_decimal(PAPER_TRAILING_AFTER_TP1_DROP_PCT * Decimal('100'), 0)}% from peak",
+            "",
+            "DexScreener:",
+            dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
+            "",
+            "Mode: Paper only. No real sell was executed.",
+        ]
+    )
+
+
+def _is_tx_after_trade_open(tx: dict[str, Any], trade: dict[str, Any]) -> bool:
+    block_time = tx.get("blockTime")
+    opened = _parse_iso_datetime(trade.get("opened_at"))
+    if not block_time or not opened:
+        return True
+    if opened.tzinfo is None:
+        opened = opened.replace(tzinfo=timezone.utc)
+    tx_time = datetime.fromtimestamp(block_time, tz=timezone.utc)
+    return tx_time >= opened
+
+
+def find_recent_dht8_out_for_trade(trade: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    mint = trade.get("mint")
+    if not mint:
+        return None
+
+    for tx in fetch_wallet_signatures(DHT8_MAIN_WALLET, limit=DHT8_EXIT_SYNC_SIGNATURE_LIMIT):
+        signature = tx.get("signature") or ""
+        if not signature:
+            continue
+        if not _is_tx_after_trade_open(tx, trade):
+            continue
+
+        analysis = analyze_transaction(signature, DHT8_MAIN_WALLET)
+        analysis_type = analysis.get("type", "")
+        token_changes = analysis.get("token_changes") or []
+        active_mint = analysis.get("active_mint") or _primary_token_mint(token_changes)
+
+        if active_mint == mint and "Distribution OUT" in analysis_type:
+            return signature, analysis
+
+    return None
 
 
 def maybe_handle_paper_copy_signal(
@@ -2050,6 +2249,36 @@ def _new_mint_metrics_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str
     return True, "New mint metrics entry quality passed."
 
 
+
+def _behavior_rotation_metrics_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
+    price = dex_info.get("price_usd") or Decimal("0")
+    liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+    volume_h1 = dex_info.get("volume_h1") or Decimal("0")
+    buys_h1 = int(dex_info.get("buys_h1") or 0)
+    ratio = _paper_buy_sell_ratio(dex_info)
+    pair_age_seconds = dex_info.get("pair_age_seconds")
+
+    if price <= 0:
+        return False, "Price is not available."
+
+    if pair_age_seconds is not None and pair_age_seconds > NEW_MINT_METRICS_MAX_AGE_SECONDS:
+        return False, "Pair age is above the behavior entry window."
+
+    if liquidity < BEHAVIOR_MIN_LIQUIDITY_USD:
+        return False, f"Behavior liquidity below {_fmt_usd(BEHAVIOR_MIN_LIQUIDITY_USD)}."
+
+    if volume_h1 < BEHAVIOR_MIN_VOLUME_H1_USD:
+        return False, f"Behavior volume 1H below {_fmt_usd(BEHAVIOR_MIN_VOLUME_H1_USD)}."
+
+    if buys_h1 < BEHAVIOR_MIN_BUYS_H1:
+        return False, f"Behavior buys 1H below {BEHAVIOR_MIN_BUYS_H1}."
+
+    if ratio < BEHAVIOR_MIN_BUY_SELL_RATIO:
+        return False, f"Behavior Buy/Sell ratio below {_fmt_decimal(BEHAVIOR_MIN_BUY_SELL_RATIO, 2)}x."
+
+    return True, "Behavior-based rotation metrics entry quality passed."
+
+
 def monitor_new_mint_metric_entries() -> list[str]:
     if not PAPER_COPY_ENABLED or not NEW_MINT_METRICS_ENTRY_ENABLED:
         return []
@@ -2070,7 +2299,9 @@ def monitor_new_mint_metric_entries() -> list[str]:
             continue
 
         token_family = watched.get("token_family") or token_family_for_mint(mint)
-        if not _is_paper_allowed_family(token_family):
+        is_allowed_family = _is_paper_allowed_family(token_family)
+        is_behavior_family = _is_behavior_rotation_family(token_family)
+        if not is_allowed_family and not is_behavior_family:
             continue
 
         dex_info = fetch_dex_token_info(mint)
@@ -2078,15 +2309,23 @@ def monitor_new_mint_metric_entries() -> list[str]:
             update_new_mint_watch_checked(mint)
             continue
 
-        passed, reason = _new_mint_metrics_entry_quality(dex_info)
+        if is_behavior_family and not is_allowed_family:
+            passed, reason = _behavior_rotation_metrics_entry_quality(dex_info)
+        else:
+            passed, reason = _new_mint_metrics_entry_quality(dex_info)
+
         if not passed:
             update_new_mint_watch_checked(mint)
             continue
 
+        paper_reason = "DHT8 New Mint Watch + strong Dex metrics; early buyers may be unknown."
+        if _is_behavior_rotation_family(token_family):
+            paper_reason = "Behavior-based DHT8 rotation + strong Dex metrics; token name may be new/unknown."
+
         analysis = {
             "type": "New Mint Metrics Entry",
             "token_family": token_family,
-            "paper_reason": "DHT8 New Mint Watch + strong Dex metrics; early buyers may be unknown.",
+            "paper_reason": paper_reason,
         }
 
         messages.append(
@@ -2117,6 +2356,24 @@ def monitor_paper_copy_trades() -> list[str]:
 
     for trade in list_open_paper_trades():
         mint = trade["mint"]
+
+        # V4.8 DHT8 OUT Sync:
+        # If the normal wallet-watch notification missed the DHT8 OUT, scan recent DHT8 txs
+        # before any price/liquidity-based exits. This prevents holding until a late rug exit.
+        recent_exit = find_recent_dht8_out_for_trade(trade)
+        if recent_exit:
+            signature, _analysis = recent_exit
+            dex_info = fetch_dex_token_info(mint) or {}
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason="DHT8 OUT sync detected. Closing before waiting for liquidity/rug exit.",
+                    signature=signature,
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
         dex_info = fetch_dex_token_info(mint)
 
         if not dex_info:
@@ -2129,6 +2386,20 @@ def monitor_paper_copy_trades() -> list[str]:
         peak_price = max(_to_decimal(trade.get("peak_price_usd")), price)
 
         update_paper_copy_market(trade, dex_info)
+
+        pnl_pct = Decimal("0")
+        if entry_price > 0:
+            pnl_pct = ((price - entry_price) / entry_price) * Decimal("100")
+
+        tp1_done = bool(int(trade.get("tp1_done") or 0))
+
+        # V4.8 TP1: lock part of the profit while keeping the remaining paper position open.
+        if not tp1_done and pnl_pct >= PAPER_TP1_PCT:
+            messages.append(mark_paper_copy_tp1(trade, dex_info))
+            refreshed_trade = get_open_paper_trade(mint)
+            if refreshed_trade:
+                trade = refreshed_trade
+            tp1_done = True
 
         if liquidity <= PAPER_LIQUIDITY_RUG_USD:
             messages.append(
@@ -2160,17 +2431,29 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        if peak_price > entry_price and price <= peak_price * (Decimal("1") - PAPER_TRAILING_DROP_PCT):
+        if tp1_done and entry_price > 0 and price <= entry_price * (Decimal("1") + PAPER_AFTER_TP1_PROFIT_LOCK_PCT):
             messages.append(
                 close_paper_copy_trade(
                     trade=trade,
-                    reason="Trailing stop: price dropped 30% from peak.",
+                    reason="Post-TP1 profit lock: remaining position fell back near protected profit area.",
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
+        trailing_drop = PAPER_TRAILING_AFTER_TP1_DROP_PCT if tp1_done else PAPER_TRAILING_DROP_PCT
+        if peak_price > entry_price and price <= peak_price * (Decimal("1") - trailing_drop):
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason=f"Trailing stop: price dropped more than {_fmt_decimal(trailing_drop * Decimal('100'), 0)}% from peak.",
                     dex_info=dex_info,
                 )
             )
             continue
 
     return messages
+
 
 def build_fast_kill_cycle_message(
     mint: str,
@@ -2197,7 +2480,7 @@ def build_fast_kill_cycle_message(
     symbol = watched.get("symbol") or TOKEN_ALIASES.get(mint) or _token_label(mint)
 
     lines = [
-        "⚡ FAST KILL CYCLE V4.7",
+        "⚡ FAST KILL CYCLE V4.8",
         "",
         f"Token: {symbol}",
         f"Mint: {_short(mint)}",
@@ -2278,6 +2561,7 @@ def build_copy_positions_message() -> str:
                 f"Now: {_fmt_price(snap['current_price'])}",
                 f"Peak: {_fmt_price(snap['peak_price'])}",
                 f"PnL: {_fmt_decimal(snap['pnl_pct'], 2)}%",
+                f"TP1: {'DONE ' + _fmt_decimal(_to_decimal(trade.get('tp1_pnl_pct')), 2) + '%' if int(trade.get('tp1_done') or 0) else 'Not yet'}",
                 f"Liquidity: {_fmt_usd(snap['current_liquidity'])}",
                 f"Age: {_age_text_from_iso(trade.get('opened_at'))}",
                 f"Reason: {trade.get('entry_label') or 'N/A'}",
@@ -2337,6 +2621,7 @@ def build_copy_trades_message(limit: int = 10) -> str:
                 f"Entry: {_fmt_price(_to_decimal(trade.get('entry_price_usd')))}",
                 f"Exit: {_fmt_price(_to_decimal(trade.get('exit_price_usd')))}",
                 f"PnL: {_fmt_decimal(pnl, 2)}%",
+                f"TP1: {'DONE ' + _fmt_decimal(_to_decimal(trade.get('tp1_pnl_pct')), 2) + '%' if int(trade.get('tp1_done') or 0) else 'No'}",
                 f"Duration: {duration}",
                 f"Reason: {trade.get('exit_reason') or 'N/A'}",
                 "DexScreener:",
@@ -2392,7 +2677,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.7",
+        f"{analysis['emoji']} Wallet Watch V4.8",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -2821,8 +3106,7 @@ async def run_wallet_watch_cycle(context) -> None:
             )
             continue
 
-        important_analysis = None
-        important_tx = None
+        important_items: list[tuple[dict[str, Any], dict[str, Any], int]] = []
         ignored_count = 0
 
         for tx in new_txs:
@@ -2834,13 +3118,11 @@ async def run_wallet_watch_cycle(context) -> None:
             analysis = analyze_transaction(signature, wallet_address)
 
             if analysis.get("notify"):
-                important_analysis = analysis
-                important_tx = tx
-                break
+                important_items.append((tx, analysis, ignored_count))
+            else:
+                ignored_count += 1
 
-            ignored_count += 1
-
-        if important_analysis and important_tx:
+        for important_tx, important_analysis, item_ignored_count in important_items:
             important_signature = important_tx.get("signature") or ""
 
             maybe_register_active_token(
@@ -2873,7 +3155,7 @@ async def run_wallet_watch_cycle(context) -> None:
                         new_txs=new_txs,
                         important_tx=important_tx,
                         analysis=important_analysis,
-                        ignored_count=ignored_count,
+                        ignored_count=item_ignored_count,
                     ),
                     disable_web_page_preview=True,
                 )
