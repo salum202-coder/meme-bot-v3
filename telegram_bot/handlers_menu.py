@@ -8,6 +8,7 @@ from telegram_bot.handlers_wallet_watch import (
     cluster_handler,
     copy_positions_handler,
     copy_trades_handler,
+    copy_wallet_handler,
 )
 from telegram_bot.handlers_trades import trades_handler
 from telegram_bot.handlers_positions import positions_handler
@@ -36,6 +37,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if text == "📜 Copy Trades":
         await copy_trades_handler(update, context)
+        return
+
+    if text == "💼 Copy Wallet":
+        await copy_wallet_handler(update, context)
         return
 
     if text == "📈 Trades":
