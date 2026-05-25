@@ -7,7 +7,8 @@ from telegram.ext import ContextTypes
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["📊 Status", "🧾 30m Digest"],
-        ["🕵️ Cluster", "📈 Trades"],
+        ["🕵️ Cluster", "📋 Copy Positions"],
+        ["📜 Copy Trades", "📈 Trades"],
         ["📌 Positions", "💼 Wallet"],
     ],
     resize_keyboard=True,
@@ -24,13 +25,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     text = (
         "✅ Meme Bot V3 is live.\n"
         "📡 Auto alerts are enabled.\n"
-        "🧾 Wallet digest runs every 30 minutes.\n\n"
+        "🧾 Wallet digest runs every 30 minutes.\n"
+        "📋 Paper Copy tracking is enabled.\n\n"
         "Use the fixed control panel below, or commands:\n"
         "/status - Bot status and performance\n"
         "/cluster - Wallet cluster watch\n"
         "/digest - Last 30m wallet digest\n"
-        "/positions - Open paper trades\n"
-        "/trades - Last closed trades\n"
+        "/copy_positions - Open Paper Copy positions\n"
+        "/copy_trades - Closed Paper Copy trades\n"
+        "/positions - Open original paper trades\n"
+        "/trades - Last original closed trades\n"
         "/wallet - Paper wallet summary"
     )
 
