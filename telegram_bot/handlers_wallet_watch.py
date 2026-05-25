@@ -7,6 +7,7 @@ from core.wallet_watcher import (
     WATCH_WALLETS,
     build_copy_positions_message,
     build_copy_trades_message,
+    build_copy_wallet_message,
 )
 from storage.repository_wallet_watch import get_wallet_watch_states
 
@@ -72,5 +73,16 @@ async def copy_trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text(
         build_copy_trades_message(limit=10),
+        disable_web_page_preview=True,
+    )
+
+
+async def copy_wallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+    await update.message.reply_text(
+        build_copy_wallet_message(),
         disable_web_page_preview=True,
     )
