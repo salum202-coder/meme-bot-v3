@@ -14,7 +14,11 @@ from telegram_bot.handlers_status import status_handler
 from telegram_bot.handlers_wallet import wallet_handler
 from telegram_bot.handlers_positions import positions_handler
 from telegram_bot.handlers_trades import trades_handler
-from telegram_bot.handlers_wallet_watch import cluster_handler
+from telegram_bot.handlers_wallet_watch import (
+    cluster_handler,
+    copy_positions_handler,
+    copy_trades_handler,
+)
 from telegram_bot.handlers_digest import digest_handler
 from telegram_bot.handlers_menu import menu_handler
 from telegram_bot.callbacks import generic_callback_handler
@@ -34,6 +38,8 @@ def build_bot_application():
     app.add_handler(CommandHandler("trades", trades_handler))
     app.add_handler(CommandHandler("cluster", cluster_handler))
     app.add_handler(CommandHandler("watch_wallets", cluster_handler))
+    app.add_handler(CommandHandler("copy_positions", copy_positions_handler))
+    app.add_handler(CommandHandler("copy_trades", copy_trades_handler))
     app.add_handler(CommandHandler("digest", digest_handler))
     app.add_handler(CallbackQueryHandler(generic_callback_handler))
 
