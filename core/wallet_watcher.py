@@ -100,7 +100,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.6
+# Paper Copy Mode V4.7
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -123,7 +123,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.6
+# Critical First Init Mode V4.7
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -138,13 +138,13 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "5syp Initial Buyer",
 )
 
-# New Mint Watch V4.6
+# New Mint Watch V4.7
 # DHT8 Distribution IN is not an entry by itself.
 # It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
 NEW_MINT_WATCH_ENABLED = True
 NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
 
-# New Mint Metrics Entry V4.6
+# New Mint Metrics Entry V4.7
 # If DHT8 receives a new mint and the token quickly shows strong DexScreener metrics,
 # open a PAPER trade even if the early buyer wallet is unknown.
 NEW_MINT_METRICS_ENTRY_ENABLED = True
@@ -191,12 +191,88 @@ def _fmt_decimal(value: Decimal, places: int = 6) -> str:
 
 
 def _fmt_usd(value: Decimal | float | int | None) -> str:
+    """Format USD values with high precision for tiny meme-token prices.
+
+    Liquidity/volume values still show as normal dollars, while token prices
+    like 0.000004102 no longer appear as $0.00.
+    """
     if value is None:
         return "N/A"
+
     try:
-        return f"${float(value):,.2f}"
+        amount = Decimal(str(value))
     except Exception:
         return "N/A"
+
+    if amount == 0:
+        return "$0"
+
+    abs_amount = abs(amount)
+
+    try:
+        if abs_amount >= Decimal("1"):
+            return f"${float(amount):,.2f}"
+
+        if abs_amount >= Decimal("0.0001"):
+            formatted = f"${float(amount):.8f}"
+        else:
+            formatted = f"${float(amount):.12f}"
+
+        return formatted.rstrip("0").rstrip(".")
+    except Exception:
+        return f"${amount}"
+
+
+def _fmt_price(value: Decimal | float | int | None) -> str:
+    return _fmt_usd(value)
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _age_text_from_iso(value: str | None) -> str:
+    dt = _parse_iso_datetime(value)
+    if not dt:
+        return "N/A"
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    seconds = max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+    return _format_duration(seconds)
+
+
+def _format_duration(seconds: int | float | None) -> str:
+    if seconds is None:
+        return "N/A"
+
+    try:
+        seconds = int(seconds)
+    except Exception:
+        return "N/A"
+
+    if seconds < 60:
+        return f"{seconds}s"
+
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+
+    hours = minutes // 60
+    minutes = minutes % 60
+    if hours < 24:
+        return f"{hours}h {minutes}m"
+
+    days = hours // 24
+    hours = hours % 24
+    return f"{days}d {hours}h"
 
 
 def _format_time(block_time: int | None) -> str:
@@ -1169,7 +1245,7 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# New Mint Watch V4.6
+# New Mint Watch V4.7
 # ---------------------------------------------------------------------------
 
 def _ensure_new_mint_watch_table() -> None:
@@ -1356,7 +1432,7 @@ def build_new_mint_watch_message(
 
     return "\n".join(
         [
-            "👀 NEW MINT WATCH V4.6",
+            "👀 NEW MINT WATCH V4.7",
             "",
             f"Token: {symbol}",
             f"Mint: {_short(mint)}",
@@ -1367,7 +1443,7 @@ def build_new_mint_watch_message(
             f"Detected: {analysis.get('type', 'N/A')}",
             "Reason: DHT8 received a new mint allocation. This is WATCH only, not entry.",
             "",
-            f"Price: {_fmt_usd(price)}",
+            f"Price: {_fmt_price(price)}",
             f"Liquidity: {_fmt_usd(liquidity)}",
             f"Volume 1H: {_fmt_usd(volume_h1)}",
             f"Buys/Sells 1H: {buys_h1}/{sells_h1}",
@@ -1440,7 +1516,7 @@ def maybe_handle_new_mint_watch_signal(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.6
+# Paper Copy Mode V4.7
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1512,6 +1588,45 @@ def list_open_paper_trades() -> list[dict[str, Any]]:
         ).fetchall()
 
         return [dict(row) for row in rows]
+
+
+def list_closed_paper_trades(limit: int = 10) -> list[dict[str, Any]]:
+    _ensure_paper_copy_table()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM paper_copy_trades
+            WHERE status = 'CLOSED'
+            ORDER BY closed_at DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+
+
+def paper_copy_summary_counts() -> dict[str, Any]:
+    _ensure_paper_copy_table()
+
+    with get_conn() as conn:
+        total_closed = conn.execute(
+            "SELECT COUNT(*) AS c FROM paper_copy_trades WHERE status = 'CLOSED'"
+        ).fetchone()["c"]
+        total_open = conn.execute(
+            "SELECT COUNT(*) AS c FROM paper_copy_trades WHERE status = 'OPEN'"
+        ).fetchone()["c"]
+        avg_row = conn.execute(
+            "SELECT AVG(pnl_pct) AS avg_pnl FROM paper_copy_trades WHERE status = 'CLOSED'"
+        ).fetchone()
+
+    return {
+        "open": total_open or 0,
+        "closed": total_closed or 0,
+        "avg_pnl": _to_decimal(avg_row["avg_pnl"] if avg_row else 0),
+    }
 
 
 def _is_paper_entry_wallet(label: str) -> bool:
@@ -1668,7 +1783,7 @@ def open_paper_copy_trade(
             f"Detected: {analysis.get('type', 'N/A')}",
             f"Reason: {analysis.get('paper_reason', 'Early known cluster buyer pattern.')}",
             "",
-            f"Entry price: {_fmt_usd(price)}",
+            f"Entry price: {_fmt_price(price)}",
             f"Liquidity: {_fmt_usd(liquidity)}",
             f"Volume 1H: {_fmt_usd(volume_h1)}",
             f"Buys/Sells 1H: {buys_h1}/{sells_h1}",
@@ -1740,8 +1855,8 @@ def close_paper_copy_trade(
             f"Mint: {_short(mint)}",
             f"Reason: {reason}",
             "",
-            f"Entry price: {_fmt_usd(entry_price)}",
-            f"Exit price: {_fmt_usd(exit_price)}",
+            f"Entry price: {_fmt_price(entry_price)}",
+            f"Exit price: {_fmt_price(exit_price)}",
             f"Paper PnL: {_fmt_decimal(pnl_pct, 2)}%",
             "",
             "DexScreener:",
@@ -1817,7 +1932,17 @@ def maybe_handle_paper_copy_signal(
 
     # If a watched new mint is moved out by DHT8 or sold by GAMq, stop watching it for entries.
     if label == "DHT8 Main" and "Distribution OUT" in analysis_type:
-        if get_new_mint_watch(mint):
+        watched_for_exit = get_new_mint_watch(mint)
+        if watched_for_exit:
+            fast_kill_message = build_fast_kill_cycle_message(
+                mint=mint,
+                watched=watched_for_exit,
+                signature=signature,
+                analysis=analysis,
+            )
+            if fast_kill_message:
+                messages.append(fast_kill_message)
+
             update_new_mint_watch_status(
                 mint=mint,
                 status="EXIT_RISK",
@@ -2047,6 +2172,182 @@ def monitor_paper_copy_trades() -> list[str]:
 
     return messages
 
+def build_fast_kill_cycle_message(
+    mint: str,
+    watched: dict[str, Any] | None,
+    signature: str | None = None,
+    analysis: dict[str, Any] | None = None,
+) -> str | None:
+    if not watched:
+        return None
+
+    first_seen_at = watched.get("first_seen_at")
+    first_seen = _parse_iso_datetime(first_seen_at)
+    if not first_seen:
+        return None
+
+    if first_seen.tzinfo is None:
+        first_seen = first_seen.replace(tzinfo=timezone.utc)
+
+    seconds = int((datetime.now(timezone.utc) - first_seen).total_seconds())
+    if seconds < 0 or seconds > 15 * 60:
+        return None
+
+    token_family = watched.get("token_family") or token_family_for_mint(mint)
+    symbol = watched.get("symbol") or TOKEN_ALIASES.get(mint) or _token_label(mint)
+
+    lines = [
+        "⚡ FAST KILL CYCLE V4.7",
+        "",
+        f"Token: {symbol}",
+        f"Mint: {_short(mint)}",
+        f"Family: {token_family or 'N/A'}",
+        "",
+        f"DHT8 IN → OUT duration: {_format_duration(seconds)}",
+        "Meaning: this mint was rotated out very quickly after DHT8 received it.",
+        "Action: Do not enter late. Treat as failed/fast-kill cycle.",
+    ]
+
+    if signature:
+        lines.extend(["", "Tx:", f"https://solscan.io/tx/{signature}"])
+
+    return "\n".join(lines)
+
+
+def _paper_trade_runtime_snapshot(trade: dict[str, Any]) -> dict[str, Any]:
+    mint = trade.get("mint")
+    dex_info = fetch_dex_token_info(mint) if mint else None
+    dex_info = dex_info or {}
+
+    current_price = dex_info.get("price_usd") or _to_decimal(trade.get("last_price_usd"))
+    current_liquidity = dex_info.get("liquidity_usd") or _to_decimal(trade.get("last_liquidity_usd"))
+    entry_price = _to_decimal(trade.get("entry_price_usd"))
+    peak_price = max(_to_decimal(trade.get("peak_price_usd")), current_price)
+
+    pnl_pct = Decimal("0")
+    if entry_price > 0:
+        pnl_pct = ((current_price - entry_price) / entry_price) * Decimal("100")
+
+    return {
+        "dex_info": dex_info,
+        "current_price": current_price,
+        "current_liquidity": current_liquidity,
+        "entry_price": entry_price,
+        "peak_price": peak_price,
+        "pnl_pct": pnl_pct,
+        "url": dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
+    }
+
+
+def build_copy_positions_message() -> str:
+    trades = list_open_paper_trades()
+    counts = paper_copy_summary_counts()
+
+    if not trades:
+        return "\n".join(
+            [
+                "📋 Paper Copy Positions",
+                "",
+                "No open paper copy positions.",
+                "",
+                f"Closed trades: {counts.get('closed', 0)}",
+                f"Average closed PnL: {_fmt_decimal(counts.get('avg_pnl') or Decimal('0'), 2)}%",
+                "",
+                "Mode: Paper only. No real positions.",
+            ]
+        )
+
+    lines = [
+        "📋 Paper Copy Positions",
+        "",
+        f"Open positions: {len(trades)}",
+        "Mode: Paper only. No real positions.",
+        "",
+    ]
+
+    for index, trade in enumerate(trades, start=1):
+        snap = _paper_trade_runtime_snapshot(trade)
+        symbol = trade.get("symbol") or (snap["dex_info"].get("symbol") if snap.get("dex_info") else None) or "UNKNOWN"
+        mint = trade.get("mint")
+
+        lines.extend(
+            [
+                f"{index}) {symbol} | {_short(mint)}",
+                f"Family: {trade.get('token_family') or token_family_for_mint(mint) or 'N/A'}",
+                f"Entry: {_fmt_price(snap['entry_price'])}",
+                f"Now: {_fmt_price(snap['current_price'])}",
+                f"Peak: {_fmt_price(snap['peak_price'])}",
+                f"PnL: {_fmt_decimal(snap['pnl_pct'], 2)}%",
+                f"Liquidity: {_fmt_usd(snap['current_liquidity'])}",
+                f"Age: {_age_text_from_iso(trade.get('opened_at'))}",
+                f"Reason: {trade.get('entry_label') or 'N/A'}",
+                "DexScreener:",
+                snap["url"],
+                "",
+            ]
+        )
+
+    return "\n".join(lines).strip()
+
+
+def build_copy_trades_message(limit: int = 10) -> str:
+    trades = list_closed_paper_trades(limit=limit)
+    counts = paper_copy_summary_counts()
+
+    if not trades:
+        return "\n".join(
+            [
+                "📜 Paper Copy Trades",
+                "",
+                "No closed paper copy trades yet.",
+                "",
+                f"Open positions: {counts.get('open', 0)}",
+                "Mode: Paper only.",
+            ]
+        )
+
+    lines = [
+        "📜 Paper Copy Trades",
+        "",
+        f"Closed trades shown: {len(trades)}",
+        f"Total closed: {counts.get('closed', 0)}",
+        f"Average PnL: {_fmt_decimal(counts.get('avg_pnl') or Decimal('0'), 2)}%",
+        "",
+    ]
+
+    for index, trade in enumerate(trades, start=1):
+        symbol = trade.get("symbol") or "UNKNOWN"
+        mint = trade.get("mint")
+        pnl = _to_decimal(trade.get("pnl_pct"))
+        opened_at = trade.get("opened_at")
+        closed_at = trade.get("closed_at")
+        duration = "N/A"
+        opened = _parse_iso_datetime(opened_at)
+        closed = _parse_iso_datetime(closed_at)
+        if opened and closed:
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            if closed.tzinfo is None:
+                closed = closed.replace(tzinfo=timezone.utc)
+            duration = _format_duration(max(0, int((closed - opened).total_seconds())))
+
+        lines.extend(
+            [
+                f"{index}) {symbol} | {_short(mint)}",
+                f"Entry: {_fmt_price(_to_decimal(trade.get('entry_price_usd')))}",
+                f"Exit: {_fmt_price(_to_decimal(trade.get('exit_price_usd')))}",
+                f"PnL: {_fmt_decimal(pnl, 2)}%",
+                f"Duration: {duration}",
+                f"Reason: {trade.get('exit_reason') or 'N/A'}",
+                "DexScreener:",
+                f"https://dexscreener.com/solana/{mint}",
+                "",
+            ]
+        )
+
+    return "\n".join(lines).strip()
+
+
 def _format_token_changes(token_changes: list[dict[str, Any]]) -> list[str]:
     if not token_changes:
         return ["Token changes: N/A"]
@@ -2091,7 +2392,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.6",
+        f"{analysis['emoji']} Wallet Watch V4.7",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -2278,9 +2579,9 @@ def build_active_token_alert(token: dict[str, Any], dex_info: dict[str, Any], al
         [
             f"Reason: {reason}",
             "",
-            f"Price: {_fmt_usd(price)}",
-            f"Entry price: {_fmt_usd(entry_price)}",
-            f"Peak price: {_fmt_usd(peak_price)}",
+            f"Price: {_fmt_price(price)}",
+            f"Entry price: {_fmt_price(entry_price)}",
+            f"Peak price: {_fmt_price(peak_price)}",
             f"From entry: {_fmt_decimal(price_from_entry, 2)}%",
             f"From peak: {_fmt_decimal(price_from_peak, 2)}%",
             "",
