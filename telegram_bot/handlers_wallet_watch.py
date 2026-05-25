@@ -3,7 +3,11 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.wallet_watcher import WATCH_WALLETS
+from core.wallet_watcher import (
+    WATCH_WALLETS,
+    build_copy_positions_message,
+    build_copy_trades_message,
+)
 from storage.repository_wallet_watch import get_wallet_watch_states
 
 
@@ -47,4 +51,26 @@ async def cluster_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ]
         )
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n".join(lines), disable_web_page_preview=True)
+
+
+async def copy_positions_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+    await update.message.reply_text(
+        build_copy_positions_message(),
+        disable_web_page_preview=True,
+    )
+
+
+async def copy_trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+    await update.message.reply_text(
+        build_copy_trades_message(limit=10),
+        disable_web_page_preview=True,
+    )
