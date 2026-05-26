@@ -101,7 +101,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.11
+# Paper Copy Mode V4.12
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -124,7 +124,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.11
+# Critical First Init Mode V4.12
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -139,13 +139,13 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "5syp Initial Buyer",
 )
 
-# New Mint Watch V4.11
+# New Mint Watch V4.12
 # DHT8 Distribution IN is not an entry by itself.
 # It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
 NEW_MINT_WATCH_ENABLED = True
 NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
 
-# New Mint Metrics Entry V4.11
+# New Mint Metrics Entry V4.12
 # If DHT8 receives a new mint and the token quickly shows strong DexScreener metrics,
 # open a PAPER trade even if the early buyer wallet is unknown.
 NEW_MINT_METRICS_ENTRY_ENABLED = True
@@ -155,7 +155,7 @@ NEW_MINT_METRICS_MIN_VOLUME_H1_USD = Decimal("50000")
 NEW_MINT_METRICS_MIN_BUYS_H1 = 20
 NEW_MINT_METRICS_MIN_BUY_SELL_RATIO = Decimal("1.20")
 
-# Behavior-Based Detection V4.11
+# Behavior-Based Detection V4.12
 # Do not depend only on names like SPCX / SLX.
 # If DHT8 receives a large allocation and Dex metrics are strong, treat it as a behavior rotation candidate.
 BEHAVIOR_ROTATION_FAMILY = "DHT8 Rotation / Behavior"
@@ -165,7 +165,7 @@ BEHAVIOR_MIN_VOLUME_H1_USD = Decimal("70000")
 BEHAVIOR_MIN_BUYS_H1 = 20
 BEHAVIOR_MIN_BUY_SELL_RATIO = Decimal("1.50")
 
-# Paper profit management V4.11
+# Paper profit management V4.12
 # This is Paper-only partial profit accounting. No real orders are sent.
 PAPER_TP1_PCT = Decimal("50")
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
@@ -177,19 +177,33 @@ TX_DETAILS_RETRY_DELAY_SECONDS = 0.75
 PAPER_NO_TP1_MAX_HOLD_HOURS = Decimal("12")
 PAPER_NO_TP1_MIN_EXIT_PNL = Decimal("5")
 
-# Paper Copy Wallet Accounting V4.11
+# Paper Copy Wallet Accounting V4.12
 # Separate from the original /wallet paper system.
 # Each Paper Copy entry is counted as a fixed notional test trade.
 PAPER_COPY_WALLET_STARTING_BALANCE_USD = Decimal("10.00")
 PAPER_COPY_TRADE_SIZE_USD = Decimal("1.00")
 
-# First Big Distribution Exit V4.11
+# First Big Distribution Exit V4.12
 # After a Paper Copy entry, any large Cluster Distribution IN/OUT on the same mint
 # is treated as a final exit signal. This is intentionally aggressive because
 # previous paper trades lost profit after early cluster distribution warnings.
 FIRST_BIG_DISTRIBUTION_EXIT_ENABLED = True
 FIRST_BIG_DISTRIBUTION_SIGNATURE_LIMIT = 6
 FIRST_BIG_DISTRIBUTION_EXIT_LABEL_PREFIX = "Cluster "
+
+# Pending TX Recheck V4.12
+# If RPC cannot return details for a fresh transaction, keep the signature and
+# re-check it in later cycles. This prevents missing DHT8 IN entries or DHT8 OUT exits.
+PENDING_TX_RECHECK_ENABLED = True
+PENDING_TX_RECHECK_MAX_ATTEMPTS = 8
+PENDING_TX_RECHECK_WINDOW_SECONDS = 20 * 60
+PENDING_TX_RECHECK_BATCH_LIMIT = 20
+
+# Digest Entry Sync V4.12
+# The 30m digest sometimes classifies transactions that were initially unavailable.
+# Allow recent digest-discovered DHT8 IN to create New Mint Watch / Paper Entry.
+DIGEST_ENTRY_SYNC_ENABLED = True
+DIGEST_ENTRY_SYNC_MAX_AGE_SECONDS = 10 * 60
 
 
 def _now_iso() -> str:
@@ -343,6 +357,39 @@ def _is_recent_block_time(block_time: int | None, window_seconds: int) -> bool:
     age_seconds = now_ts - float(block_time)
 
     return 0 <= age_seconds <= window_seconds
+
+
+def _block_time_age_seconds(block_time: int | None) -> int | None:
+    if not block_time:
+        return None
+    try:
+        return int(datetime.now(timezone.utc).timestamp() - int(block_time))
+    except Exception:
+        return None
+
+
+def _is_no_details_unknown(analysis: dict[str, Any]) -> bool:
+    return (
+        analysis.get("type") == "Unknown"
+        and analysis.get("noise_reason") == "No transaction details"
+    )
+
+
+def _is_paper_relevant_analysis(analysis: dict[str, Any]) -> bool:
+    analysis_type = analysis.get("type", "")
+    if analysis.get("notify"):
+        return True
+    if "BUY" in analysis_type:
+        return True
+    if "SELL" in analysis_type:
+        return True
+    if "Distribution" in analysis_type:
+        return True
+    if "Transfer OUT" in analysis_type and "ignored" not in analysis_type:
+        return True
+    if "Transfer IN" in analysis_type and "ignored" not in analysis_type:
+        return True
+    return False
 
 
 def _ensure_active_token_table() -> None:
@@ -698,7 +745,7 @@ def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[s
 def fetch_transaction_details(signature: str, attempts: int | None = None, retry_delay_seconds: float | None = None) -> dict[str, Any] | None:
     """Fetch parsed Solana transaction details with short retries.
 
-    V4.11: public RPC can return None for a fresh transaction for a few seconds.
+    V4.12: public RPC can return None for a fresh transaction for a few seconds.
     Retrying here reduces false Unknown traces and helps DHT8 OUT / cluster exits
     trigger before a late liquidity-rug exit.
     """
@@ -1294,7 +1341,215 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# New Mint Watch V4.11
+# Pending TX Recheck V4.12
+# ---------------------------------------------------------------------------
+
+def _ensure_pending_tx_table() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_unknown_transactions (
+                signature TEXT PRIMARY KEY,
+                label TEXT,
+                wallet_address TEXT,
+                block_time INTEGER,
+                attempts INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'PENDING',
+                first_seen_at TEXT,
+                last_checked_at TEXT,
+                resolved_at TEXT,
+                resolved_type TEXT
+            )
+            """
+        )
+        conn.commit()
+
+
+def save_pending_unknown_tx(
+    label: str,
+    wallet_address: str,
+    signature: str,
+    block_time: int | None,
+) -> None:
+    if not PENDING_TX_RECHECK_ENABLED or not signature:
+        return
+
+    _ensure_pending_tx_table()
+    now = _now_iso()
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO pending_unknown_transactions (
+                signature,
+                label,
+                wallet_address,
+                block_time,
+                attempts,
+                status,
+                first_seen_at,
+                last_checked_at
+            )
+            VALUES (?, ?, ?, ?, 0, 'PENDING', ?, ?)
+            ON CONFLICT(signature)
+            DO UPDATE SET
+                label = excluded.label,
+                wallet_address = excluded.wallet_address,
+                block_time = COALESCE(excluded.block_time, pending_unknown_transactions.block_time),
+                last_checked_at = excluded.last_checked_at
+            WHERE pending_unknown_transactions.status = 'PENDING'
+            """,
+            (signature, label, wallet_address, block_time, now, now),
+        )
+        conn.commit()
+
+
+def list_pending_unknown_txs(limit: int = PENDING_TX_RECHECK_BATCH_LIMIT) -> list[dict[str, Any]]:
+    _ensure_pending_tx_table()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM pending_unknown_transactions
+            WHERE status = 'PENDING'
+            ORDER BY first_seen_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+
+
+def mark_pending_unknown_tx(
+    signature: str,
+    status: str,
+    attempts: int,
+    resolved_type: str | None = None,
+) -> None:
+    _ensure_pending_tx_table()
+    now = _now_iso()
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE pending_unknown_transactions
+            SET
+                attempts = ?,
+                status = ?,
+                last_checked_at = ?,
+                resolved_at = CASE WHEN ? != 'PENDING' THEN ? ELSE resolved_at END,
+                resolved_type = COALESCE(?, resolved_type)
+            WHERE signature = ?
+            """,
+            (attempts, status, now, status, now, resolved_type, signature),
+        )
+        conn.commit()
+
+
+def build_pending_recheck_message(
+    row: dict[str, Any],
+    analysis: dict[str, Any],
+) -> str:
+    signature = row.get("signature") or ""
+    label = row.get("label") or "Unknown"
+    wallet_address = row.get("wallet_address") or ""
+    token_changes = analysis.get("token_changes") or []
+    token_text = "Token: N/A"
+
+    if token_changes:
+        item = token_changes[0]
+        delta = item.get("delta", Decimal("0"))
+        sign = "+" if delta > 0 else ""
+        token_text = f"Token: {_token_label(item.get('mint'))} {sign}{_fmt_decimal(delta, 4)}"
+
+    return "\n".join(
+        [
+            "🔁 Pending TX Recheck V4.12",
+            "",
+            f"Label: {label}",
+            f"Wallet: {_short(wallet_address)}",
+            f"Resolved as: {analysis.get('type', 'Unknown')}",
+            f"Confidence: {analysis.get('confidence', 'low')}",
+            token_text,
+            f"Tx: https://solscan.io/tx/{signature}",
+            "",
+            "Action: Rechecked after RPC details were initially unavailable.",
+        ]
+    )
+
+
+def process_pending_unknown_txs() -> list[str]:
+    if not PENDING_TX_RECHECK_ENABLED:
+        return []
+
+    messages: list[str] = []
+
+    for row in list_pending_unknown_txs():
+        signature = row.get("signature") or ""
+        label = row.get("label") or "Unknown"
+        wallet_address = row.get("wallet_address") or ""
+        block_time = row.get("block_time")
+        attempts = int(row.get("attempts") or 0) + 1
+
+        age_seconds = _block_time_age_seconds(block_time)
+        if age_seconds is not None and age_seconds > PENDING_TX_RECHECK_WINDOW_SECONDS:
+            mark_pending_unknown_tx(
+                signature=signature,
+                status="EXPIRED",
+                attempts=attempts,
+                resolved_type="expired",
+            )
+            continue
+
+        analysis = analyze_transaction(signature, wallet_address)
+
+        if _is_no_details_unknown(analysis):
+            next_status = "PENDING" if attempts < PENDING_TX_RECHECK_MAX_ATTEMPTS else "FAILED"
+            mark_pending_unknown_tx(
+                signature=signature,
+                status=next_status,
+                attempts=attempts,
+                resolved_type="no_details" if next_status == "FAILED" else None,
+            )
+            continue
+
+        mark_pending_unknown_tx(
+            signature=signature,
+            status="RESOLVED",
+            attempts=attempts,
+            resolved_type=analysis.get("type", "Unknown"),
+        )
+
+        if not _is_paper_relevant_analysis(analysis):
+            continue
+
+        maybe_register_active_token(
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis=analysis,
+        )
+
+        paper_messages = maybe_handle_paper_copy_signal(
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis=analysis,
+        )
+
+        messages.append(build_pending_recheck_message(row=row, analysis=analysis))
+        messages.extend(paper_messages)
+
+    # If a pending DHT8 IN created a New Mint Watch, immediately evaluate metrics.
+    messages.extend(monitor_new_mint_metric_entries())
+
+    return messages
+
+
+# ---------------------------------------------------------------------------
+# New Mint Watch V4.12
 # ---------------------------------------------------------------------------
 
 def _ensure_new_mint_watch_table() -> None:
@@ -1481,7 +1736,7 @@ def build_new_mint_watch_message(
 
     return "\n".join(
         [
-            "👀 NEW MINT WATCH V4.11",
+            "👀 NEW MINT WATCH V4.12",
             "",
             f"Token: {symbol}",
             f"Mint: {_short(mint)}",
@@ -1536,7 +1791,7 @@ def maybe_handle_new_mint_watch_signal(
     if "Distribution IN" not in analysis_type:
         return []
 
-    # V4.11: names can change. If token family is unknown but DHT8 received
+    # V4.12: names can change. If token family is unknown but DHT8 received
     # a large allocation, treat it as a behavior-based rotation candidate.
     primary_amount = Decimal("0")
     positive_tokens = [x for x in token_changes if x.get("delta", Decimal("0")) > 0]
@@ -1578,7 +1833,7 @@ def maybe_handle_new_mint_watch_signal(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.11
+# Paper Copy Mode V4.12
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1614,7 +1869,7 @@ def _ensure_paper_copy_table() -> None:
             """
         )
 
-        # V4.11 migration columns for partial TP accounting.
+        # V4.12 migration columns for partial TP accounting.
         for column_name, column_type in [
             ("tp1_done", "INTEGER DEFAULT 0"),
             ("tp1_price_usd", "REAL DEFAULT 0"),
@@ -2142,7 +2397,7 @@ def maybe_close_paper_copy_from_digest_event(
 ) -> list[str]:
     """Close open Paper Copy trades when the digest successfully identifies an exit.
 
-    V4.11: if the main wallet-watch cycle initially saw a fresh tx as Unknown
+    V4.12: if the main wallet-watch cycle initially saw a fresh tx as Unknown
     because RPC details were not available, the 30m digest can later classify it
     as DHT8 OUT / GAMq exit / cluster distribution. This sync prevents waiting
     until a late liquidity-rug exit.
@@ -2247,7 +2502,7 @@ def _is_big_distribution_signal_for_mint(analysis: dict[str, Any], mint: str) ->
 def find_recent_cluster_distribution_for_trade(trade: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
     """Find the first recent Cluster Distribution IN/OUT on the same open mint after entry.
 
-    V4.11 uses this as a defensive final-exit sync, because the cluster often
+    V4.12 uses this as a defensive final-exit sync, because the cluster often
     distributes to wallets like B6ut/FdwJBf before the liquidity collapse.
     """
     if not FIRST_BIG_DISTRIBUTION_EXIT_ENABLED:
@@ -2357,7 +2612,7 @@ def maybe_handle_paper_copy_signal(
         )
         return messages
 
-    # V4.11 Exit rule 3:
+    # V4.12 Exit rule 3:
     # Any first large cluster distribution on the same open mint after entry is final exit.
     # This protects profit/capital before waiting for liquidity-rug confirmation.
     if open_trade and _is_cluster_distribution_exit_label(label) and _is_big_distribution_signal_for_mint(analysis, mint):
@@ -2470,6 +2725,59 @@ def _behavior_rotation_metrics_entry_quality(dex_info: dict[str, Any]) -> tuple[
     return True, "Behavior-based rotation metrics entry quality passed."
 
 
+
+def maybe_handle_digest_paper_sync(
+    label: str,
+    wallet_address: str,
+    signature: str,
+    block_time: int | None,
+    analysis: dict[str, Any],
+) -> list[str]:
+    """Allow the digest to sync missed paper entries/exits.
+
+    V4.12: Some fresh DHT8 transactions arrive as RPC Unknown during live watch,
+    then become readable in the digest. This wrapper lets the digest create New
+    Mint Watch / Paper Entry or close open trades, while protecting against late entries.
+    """
+    if not PAPER_COPY_ENABLED or not DIGEST_ENTRY_SYNC_ENABLED:
+        return []
+
+    analysis_type = analysis.get("type", "")
+    token_changes = analysis.get("token_changes") or []
+    mint = analysis.get("active_mint") or _primary_token_mint(token_changes)
+
+    if not mint:
+        return []
+
+    age_seconds = _block_time_age_seconds(block_time)
+    is_recent = age_seconds is None or age_seconds <= DIGEST_ENTRY_SYNC_MAX_AGE_SECONDS
+
+    # Exits must be processed even if the digest is a bit late.
+    if get_open_paper_trade(mint):
+        return maybe_handle_paper_copy_signal(
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis=analysis,
+        )
+
+    # Entries from digest are allowed only when fresh, to avoid chasing old mints.
+    if not is_recent:
+        return []
+
+    if label == "DHT8 Main" and "Distribution IN" in analysis_type:
+        messages = maybe_handle_paper_copy_signal(
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis=analysis,
+        )
+        messages.extend(monitor_new_mint_metric_entries())
+        return messages
+
+    return []
+
+
 def monitor_new_mint_metric_entries() -> list[str]:
     if not PAPER_COPY_ENABLED or not NEW_MINT_METRICS_ENTRY_ENABLED:
         return []
@@ -2548,7 +2856,7 @@ def monitor_paper_copy_trades() -> list[str]:
     for trade in list_open_paper_trades():
         mint = trade["mint"]
 
-        # V4.11 DHT8 OUT Sync:
+        # V4.12 DHT8 OUT Sync:
         # If the normal wallet-watch notification missed the DHT8 OUT, scan recent DHT8 txs
         # before any price/liquidity-based exits. This prevents holding until a late rug exit.
         recent_exit = find_recent_dht8_out_for_trade(trade)
@@ -2565,7 +2873,7 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        # V4.11 Cluster Distribution Sync:
+        # V4.12 Cluster Distribution Sync:
         # If Wallet Watch or digest already saw distribution on an open mint,
         # close immediately instead of waiting for a late liquidity drop.
         recent_cluster_distribution = find_recent_cluster_distribution_for_trade(trade)
@@ -2601,7 +2909,7 @@ def monitor_paper_copy_trades() -> list[str]:
 
         tp1_done = bool(int(trade.get("tp1_done") or 0))
 
-        # V4.11 TP1: lock part of the profit while keeping the remaining paper position open.
+        # V4.12 TP1: lock part of the profit while keeping the remaining paper position open.
         if not tp1_done and pnl_pct >= PAPER_TP1_PCT:
             messages.append(mark_paper_copy_tp1(trade, dex_info))
             refreshed_trade = get_open_paper_trade(mint)
@@ -2609,7 +2917,7 @@ def monitor_paper_copy_trades() -> list[str]:
                 trade = refreshed_trade
             tp1_done = True
 
-        # V4.11 Time Protection:
+        # V4.12 Time Protection:
         # If a behavior/new-mint trade stays open too long without reaching TP1,
         # close a positive trade instead of waiting for the cluster to kill liquidity.
         if (
@@ -2705,7 +3013,7 @@ def build_fast_kill_cycle_message(
     symbol = watched.get("symbol") or TOKEN_ALIASES.get(mint) or _token_label(mint)
 
     lines = [
-        "⚡ FAST KILL CYCLE V4.11",
+        "⚡ FAST KILL CYCLE V4.12",
         "",
         f"Token: {symbol}",
         f"Mint: {_short(mint)}",
@@ -2954,7 +3262,7 @@ def build_copy_wallet_message() -> str:
         total_pnl_pct = (total_pnl_usd / PAPER_COPY_WALLET_STARTING_BALANCE_USD) * Decimal("100")
 
     lines = [
-        "💼 Paper Copy Wallet V4.11",
+        "💼 Paper Copy Wallet V4.12",
         "",
         f"Starting Balance: {_fmt_usd(PAPER_COPY_WALLET_STARTING_BALANCE_USD)}",
         f"Paper Trade Size: {_fmt_usd(PAPER_COPY_TRADE_SIZE_USD)} each",
@@ -3023,7 +3331,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.11",
+        f"{analysis['emoji']} Wallet Watch V4.12",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -3324,6 +3632,9 @@ async def run_wallet_watch_cycle(context) -> None:
             ):
                 analysis = analyze_transaction(latest_signature, wallet_address)
 
+                if _is_no_details_unknown(analysis):
+                    save_pending_unknown_tx(label, wallet_address, latest_signature, latest_block_time)
+
                 if analysis.get("notify"):
                     maybe_register_active_token(
                         label=label,
@@ -3397,6 +3708,9 @@ async def run_wallet_watch_cycle(context) -> None:
 
                 analysis = analyze_transaction(signature, wallet_address)
 
+                if _is_no_details_unknown(analysis):
+                    save_pending_unknown_tx(label, wallet_address, signature, tx.get("blockTime"))
+
                 if analysis.get("notify"):
                     maybe_register_active_token(
                         label=label,
@@ -3463,6 +3777,9 @@ async def run_wallet_watch_cycle(context) -> None:
 
             analysis = analyze_transaction(signature, wallet_address)
 
+            if _is_no_details_unknown(analysis):
+                save_pending_unknown_tx(label, wallet_address, signature, tx.get("blockTime"))
+
             if analysis.get("notify"):
                 important_items.append((tx, analysis, ignored_count))
             else:
@@ -3514,6 +3831,13 @@ async def run_wallet_watch_cycle(context) -> None:
         )
 
     if chat_id:
+        for paper_message in process_pending_unknown_txs():
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=paper_message,
+                disable_web_page_preview=True,
+            )
+
         for alert in monitor_active_tokens():
             await context.bot.send_message(
                 chat_id=chat_id,
