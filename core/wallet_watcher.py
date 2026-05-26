@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -100,7 +101,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.10
+# Paper Copy Mode V4.11
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -123,7 +124,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.10
+# Critical First Init Mode V4.11
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -138,13 +139,13 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "5syp Initial Buyer",
 )
 
-# New Mint Watch V4.10
+# New Mint Watch V4.11
 # DHT8 Distribution IN is not an entry by itself.
 # It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
 NEW_MINT_WATCH_ENABLED = True
 NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
 
-# New Mint Metrics Entry V4.10
+# New Mint Metrics Entry V4.11
 # If DHT8 receives a new mint and the token quickly shows strong DexScreener metrics,
 # open a PAPER trade even if the early buyer wallet is unknown.
 NEW_MINT_METRICS_ENTRY_ENABLED = True
@@ -154,7 +155,7 @@ NEW_MINT_METRICS_MIN_VOLUME_H1_USD = Decimal("50000")
 NEW_MINT_METRICS_MIN_BUYS_H1 = 20
 NEW_MINT_METRICS_MIN_BUY_SELL_RATIO = Decimal("1.20")
 
-# Behavior-Based Detection V4.10
+# Behavior-Based Detection V4.11
 # Do not depend only on names like SPCX / SLX.
 # If DHT8 receives a large allocation and Dex metrics are strong, treat it as a behavior rotation candidate.
 BEHAVIOR_ROTATION_FAMILY = "DHT8 Rotation / Behavior"
@@ -164,21 +165,25 @@ BEHAVIOR_MIN_VOLUME_H1_USD = Decimal("70000")
 BEHAVIOR_MIN_BUYS_H1 = 20
 BEHAVIOR_MIN_BUY_SELL_RATIO = Decimal("1.50")
 
-# Paper profit management V4.10
+# Paper profit management V4.11
 # This is Paper-only partial profit accounting. No real orders are sent.
 PAPER_TP1_PCT = Decimal("50")
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
 PAPER_AFTER_TP1_PROFIT_LOCK_PCT = Decimal("0.10")
 PAPER_TRAILING_AFTER_TP1_DROP_PCT = Decimal("0.20")
-DHT8_EXIT_SYNC_SIGNATURE_LIMIT = 25
+DHT8_EXIT_SYNC_SIGNATURE_LIMIT = 40
+TX_DETAILS_RETRY_ATTEMPTS = 4
+TX_DETAILS_RETRY_DELAY_SECONDS = 0.75
+PAPER_NO_TP1_MAX_HOLD_HOURS = Decimal("12")
+PAPER_NO_TP1_MIN_EXIT_PNL = Decimal("5")
 
-# Paper Copy Wallet Accounting V4.10
+# Paper Copy Wallet Accounting V4.11
 # Separate from the original /wallet paper system.
 # Each Paper Copy entry is counted as a fixed notional test trade.
 PAPER_COPY_WALLET_STARTING_BALANCE_USD = Decimal("10.00")
 PAPER_COPY_TRADE_SIZE_USD = Decimal("1.00")
 
-# First Big Distribution Exit V4.10
+# First Big Distribution Exit V4.11
 # After a Paper Copy entry, any large Cluster Distribution IN/OUT on the same mint
 # is treated as a final exit signal. This is intentionally aggressive because
 # previous paper trades lost profit after early cluster distribution warnings.
@@ -690,7 +695,13 @@ def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[s
     return result
 
 
-def fetch_transaction_details(signature: str) -> dict[str, Any] | None:
+def fetch_transaction_details(signature: str, attempts: int | None = None, retry_delay_seconds: float | None = None) -> dict[str, Any] | None:
+    """Fetch parsed Solana transaction details with short retries.
+
+    V4.11: public RPC can return None for a fresh transaction for a few seconds.
+    Retrying here reduces false Unknown traces and helps DHT8 OUT / cluster exits
+    trigger before a late liquidity-rug exit.
+    """
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -704,19 +715,25 @@ def fetch_transaction_details(signature: str) -> dict[str, Any] | None:
         ],
     }
 
-    try:
-        response = requests.post(SOLANA_RPC_URL, json=payload, timeout=12)
-        response.raise_for_status()
-        data = response.json()
-    except Exception:
-        return None
+    max_attempts = attempts if attempts is not None else TX_DETAILS_RETRY_ATTEMPTS
+    delay = retry_delay_seconds if retry_delay_seconds is not None else TX_DETAILS_RETRY_DELAY_SECONDS
 
-    result = data.get("result")
-    if not isinstance(result, dict):
-        return None
+    for attempt in range(max(1, int(max_attempts))):
+        try:
+            response = requests.post(SOLANA_RPC_URL, json=payload, timeout=12)
+            response.raise_for_status()
+            data = response.json()
+        except Exception:
+            data = {}
 
-    return result
+        result = data.get("result") if isinstance(data, dict) else None
+        if isinstance(result, dict):
+            return result
 
+        if attempt < max_attempts - 1:
+            time.sleep(float(delay))
+
+    return None
 
 def _is_success(tx: dict[str, Any]) -> bool:
     return tx.get("err") is None
@@ -1277,7 +1294,7 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# New Mint Watch V4.10
+# New Mint Watch V4.11
 # ---------------------------------------------------------------------------
 
 def _ensure_new_mint_watch_table() -> None:
@@ -1464,7 +1481,7 @@ def build_new_mint_watch_message(
 
     return "\n".join(
         [
-            "👀 NEW MINT WATCH V4.10",
+            "👀 NEW MINT WATCH V4.11",
             "",
             f"Token: {symbol}",
             f"Mint: {_short(mint)}",
@@ -1519,7 +1536,7 @@ def maybe_handle_new_mint_watch_signal(
     if "Distribution IN" not in analysis_type:
         return []
 
-    # V4.10: names can change. If token family is unknown but DHT8 received
+    # V4.11: names can change. If token family is unknown but DHT8 received
     # a large allocation, treat it as a behavior-based rotation candidate.
     primary_amount = Decimal("0")
     positive_tokens = [x for x in token_changes if x.get("delta", Decimal("0")) > 0]
@@ -1561,7 +1578,7 @@ def maybe_handle_new_mint_watch_signal(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.10
+# Paper Copy Mode V4.11
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1597,7 +1614,7 @@ def _ensure_paper_copy_table() -> None:
             """
         )
 
-        # V4.10 migration columns for partial TP accounting.
+        # V4.11 migration columns for partial TP accounting.
         for column_name, column_type in [
             ("tp1_done", "INTEGER DEFAULT 0"),
             ("tp1_price_usd", "REAL DEFAULT 0"),
@@ -2104,6 +2121,82 @@ def _is_tx_after_trade_open(tx: dict[str, Any], trade: dict[str, Any]) -> bool:
     return tx_time >= opened
 
 
+
+def _trade_age_hours(trade: dict[str, Any]) -> Decimal:
+    opened = _parse_iso_datetime(trade.get("opened_at"))
+    if not opened:
+        return Decimal("0")
+    if opened.tzinfo is None:
+        opened = opened.replace(tzinfo=timezone.utc)
+    seconds = (datetime.now(timezone.utc) - opened).total_seconds()
+    if seconds <= 0:
+        return Decimal("0")
+    return Decimal(str(seconds)) / Decimal("3600")
+
+
+def maybe_close_paper_copy_from_digest_event(
+    label: str,
+    wallet_address: str,
+    tx: dict[str, Any],
+    analysis: dict[str, Any],
+) -> list[str]:
+    """Close open Paper Copy trades when the digest successfully identifies an exit.
+
+    V4.11: if the main wallet-watch cycle initially saw a fresh tx as Unknown
+    because RPC details were not available, the 30m digest can later classify it
+    as DHT8 OUT / GAMq exit / cluster distribution. This sync prevents waiting
+    until a late liquidity-rug exit.
+    """
+    if not PAPER_COPY_ENABLED:
+        return []
+
+    signature = tx.get("signature") or ""
+    if not signature:
+        return []
+
+    token_changes = analysis.get("token_changes") or []
+    mint = analysis.get("active_mint") or _primary_token_mint(token_changes)
+    if not mint:
+        return []
+
+    open_trade = get_open_paper_trade(mint)
+    if not open_trade:
+        return []
+
+    if not _is_tx_after_trade_open(tx, open_trade):
+        return []
+
+    analysis_type = analysis.get("type", "")
+
+    if label == "DHT8 Main" and "Distribution OUT" in analysis_type:
+        return [
+            close_paper_copy_trade(
+                trade=open_trade,
+                reason="Digest exit sync: DHT8 OUT detected on open mint.",
+                signature=signature,
+            )
+        ]
+
+    if "GAMq" in label and ("SELL" in analysis_type or "Distribution OUT" in analysis_type):
+        return [
+            close_paper_copy_trade(
+                trade=open_trade,
+                reason="Digest exit sync: GAMq exit activity detected on open mint.",
+                signature=signature,
+            )
+        ]
+
+    if _is_cluster_distribution_exit_label(label) and _is_big_distribution_signal_for_mint(analysis, mint):
+        return [
+            close_paper_copy_trade(
+                trade=open_trade,
+                reason=f"Digest exit sync: first big cluster distribution detected on open mint: {label}.",
+                signature=signature,
+            )
+        ]
+
+    return []
+
 def find_recent_dht8_out_for_trade(trade: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     mint = trade.get("mint")
     if not mint:
@@ -2154,7 +2247,7 @@ def _is_big_distribution_signal_for_mint(analysis: dict[str, Any], mint: str) ->
 def find_recent_cluster_distribution_for_trade(trade: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
     """Find the first recent Cluster Distribution IN/OUT on the same open mint after entry.
 
-    V4.10 uses this as a defensive final-exit sync, because the cluster often
+    V4.11 uses this as a defensive final-exit sync, because the cluster often
     distributes to wallets like B6ut/FdwJBf before the liquidity collapse.
     """
     if not FIRST_BIG_DISTRIBUTION_EXIT_ENABLED:
@@ -2264,7 +2357,7 @@ def maybe_handle_paper_copy_signal(
         )
         return messages
 
-    # V4.10 Exit rule 3:
+    # V4.11 Exit rule 3:
     # Any first large cluster distribution on the same open mint after entry is final exit.
     # This protects profit/capital before waiting for liquidity-rug confirmation.
     if open_trade and _is_cluster_distribution_exit_label(label) and _is_big_distribution_signal_for_mint(analysis, mint):
@@ -2455,7 +2548,7 @@ def monitor_paper_copy_trades() -> list[str]:
     for trade in list_open_paper_trades():
         mint = trade["mint"]
 
-        # V4.10 DHT8 OUT Sync:
+        # V4.11 DHT8 OUT Sync:
         # If the normal wallet-watch notification missed the DHT8 OUT, scan recent DHT8 txs
         # before any price/liquidity-based exits. This prevents holding until a late rug exit.
         recent_exit = find_recent_dht8_out_for_trade(trade)
@@ -2472,7 +2565,7 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        # V4.10 Cluster Distribution Sync:
+        # V4.11 Cluster Distribution Sync:
         # If Wallet Watch or digest already saw distribution on an open mint,
         # close immediately instead of waiting for a late liquidity drop.
         recent_cluster_distribution = find_recent_cluster_distribution_for_trade(trade)
@@ -2508,13 +2601,30 @@ def monitor_paper_copy_trades() -> list[str]:
 
         tp1_done = bool(int(trade.get("tp1_done") or 0))
 
-        # V4.10 TP1: lock part of the profit while keeping the remaining paper position open.
+        # V4.11 TP1: lock part of the profit while keeping the remaining paper position open.
         if not tp1_done and pnl_pct >= PAPER_TP1_PCT:
             messages.append(mark_paper_copy_tp1(trade, dex_info))
             refreshed_trade = get_open_paper_trade(mint)
             if refreshed_trade:
                 trade = refreshed_trade
             tp1_done = True
+
+        # V4.11 Time Protection:
+        # If a behavior/new-mint trade stays open too long without reaching TP1,
+        # close a positive trade instead of waiting for the cluster to kill liquidity.
+        if (
+            not tp1_done
+            and _trade_age_hours(trade) >= PAPER_NO_TP1_MAX_HOLD_HOURS
+            and pnl_pct >= PAPER_NO_TP1_MIN_EXIT_PNL
+        ):
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason=f"Time protection: trade exceeded {_fmt_decimal(PAPER_NO_TP1_MAX_HOLD_HOURS, 0)}h without TP1 and is still positive.",
+                    dex_info=dex_info,
+                )
+            )
+            continue
 
         if liquidity <= PAPER_LIQUIDITY_RUG_USD:
             messages.append(
@@ -2595,7 +2705,7 @@ def build_fast_kill_cycle_message(
     symbol = watched.get("symbol") or TOKEN_ALIASES.get(mint) or _token_label(mint)
 
     lines = [
-        "⚡ FAST KILL CYCLE V4.10",
+        "⚡ FAST KILL CYCLE V4.11",
         "",
         f"Token: {symbol}",
         f"Mint: {_short(mint)}",
@@ -2844,7 +2954,7 @@ def build_copy_wallet_message() -> str:
         total_pnl_pct = (total_pnl_usd / PAPER_COPY_WALLET_STARTING_BALANCE_USD) * Decimal("100")
 
     lines = [
-        "💼 Paper Copy Wallet V4.10",
+        "💼 Paper Copy Wallet V4.11",
         "",
         f"Starting Balance: {_fmt_usd(PAPER_COPY_WALLET_STARTING_BALANCE_USD)}",
         f"Paper Trade Size: {_fmt_usd(PAPER_COPY_TRADE_SIZE_USD)} each",
@@ -2913,7 +3023,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.10",
+        f"{analysis['emoji']} Wallet Watch V4.11",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
