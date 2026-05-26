@@ -10,6 +10,7 @@ from core.wallet_watcher import (
     analyze_transaction,
     fetch_wallet_signatures,
     maybe_close_paper_copy_from_digest_event,
+    maybe_handle_digest_paper_sync,
     _fmt_decimal,
     _format_time,
     _is_success,
@@ -125,7 +126,7 @@ def _wallet_summary_line(
     )
 
 
-def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[str]]:
+def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[str], list[str]]:
     now_ts = int(datetime.now(timezone.utc).timestamp())
     cutoff_ts = now_ts - (LOOKBACK_MINUTES * 60)
 
@@ -133,6 +134,7 @@ def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[
     important_lines: list[str] = []
     inactive_wallets: list[str] = []
     paper_exit_messages: list[str] = []
+    paper_sync_messages: list[str] = []
     total_txs = 0
 
     for label, wallet_address in WATCH_WALLETS.items():
@@ -165,7 +167,20 @@ def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[
                 important_count += 1
                 important_lines.append(_important_line(label, wallet_address, tx, analysis))
 
-                # V4.11 Digest Exit Sync:
+                # V4.12 Digest Entry/Exit Sync:
+                # If the live watcher missed a fresh DHT8 IN because transaction
+                # details were unavailable, the digest can still create the watch/entry.
+                paper_sync_messages.extend(
+                    maybe_handle_digest_paper_sync(
+                        label=label,
+                        wallet_address=wallet_address,
+                        signature=signature,
+                        block_time=tx.get("blockTime"),
+                        analysis=analysis,
+                    )
+                )
+
+                # V4.12 Digest Exit Sync:
                 # If the digest successfully classifies a DHT8/cluster exit after the
                 # main watcher initially saw it as Unknown, close the matching open
                 # Paper Copy trade immediately from this digest pass.
@@ -188,7 +203,7 @@ def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[
             )
         )
 
-    return wallet_summaries, important_lines, inactive_wallets, total_txs, paper_exit_messages
+    return wallet_summaries, important_lines, inactive_wallets, total_txs, paper_exit_messages, paper_sync_messages
 
 
 def build_wallet_digest_report(
@@ -253,7 +268,7 @@ async def send_wallet_digest(context) -> None:
     if not chat_id:
         return
 
-    wallet_summaries, important_lines, inactive_wallets, total_txs, paper_exit_messages = collect_wallet_digest()
+    wallet_summaries, important_lines, inactive_wallets, total_txs, paper_exit_messages, paper_sync_messages = collect_wallet_digest()
 
     for paper_message in paper_exit_messages:
         await context.bot.send_message(
@@ -273,6 +288,12 @@ async def send_wallet_digest(context) -> None:
             ),
             disable_web_page_preview=True,
         )
+        for paper_message in paper_sync_messages:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=paper_message,
+                disable_web_page_preview=True,
+            )
         return
 
     chunks = [
@@ -293,6 +314,13 @@ async def send_wallet_digest(context) -> None:
                 part_number=index,
                 total_parts=total_parts,
             ),
+            disable_web_page_preview=True,
+        )
+
+    for paper_message in paper_sync_messages:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=paper_message,
             disable_web_page_preview=True,
         )
 
