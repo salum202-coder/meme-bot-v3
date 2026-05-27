@@ -167,7 +167,7 @@ def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[
                 important_count += 1
                 important_lines.append(_important_line(label, wallet_address, tx, analysis))
 
-                # V4.12 Digest Entry/Exit Sync:
+                # V4.13 Digest Entry/Exit Sync:
                 # If the live watcher missed a fresh DHT8 IN because transaction
                 # details were unavailable, the digest can still create the watch/entry.
                 paper_sync_messages.extend(
@@ -180,7 +180,7 @@ def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[
                     )
                 )
 
-                # V4.12 Digest Exit Sync:
+                # V4.13 Digest Exit Sync:
                 # If the digest successfully classifies a DHT8/cluster exit after the
                 # main watcher initially saw it as Unknown, close the matching open
                 # Paper Copy trade immediately from this digest pass.
