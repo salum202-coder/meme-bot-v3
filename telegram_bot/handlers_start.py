@@ -8,6 +8,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["📊 Status", "🧾 30m Digest"],
         ["🕵️ Cluster", "🧠 Cluster Map"],
+        ["🧠 Pattern Brain"],
         ["📋 Copy Positions", "📜 Copy Trades"],
         ["💼 Copy Wallet"],
         ["🔴 Close Copy All"],
