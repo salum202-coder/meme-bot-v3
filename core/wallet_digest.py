@@ -7,6 +7,7 @@ from typing import Any
 
 from core.wallet_watcher import (
     WATCH_WALLETS,
+    get_all_watch_wallets,
     analyze_transaction,
     fetch_wallet_signatures,
     maybe_close_paper_copy_from_digest_event,
@@ -137,7 +138,7 @@ def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[
     paper_sync_messages: list[str] = []
     total_txs = 0
 
-    for label, wallet_address in WATCH_WALLETS.items():
+    for label, wallet_address in get_all_watch_wallets().items():
         signatures = fetch_wallet_signatures(wallet_address, limit=MAX_TXS_TO_FETCH_PER_WALLET)
 
         recent_txs = [
@@ -167,7 +168,7 @@ def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[
                 important_count += 1
                 important_lines.append(_important_line(label, wallet_address, tx, analysis))
 
-                # V4.14 Digest Entry/Exit Sync:
+                # V4.16 Digest Entry/Exit Sync:
                 # If the live watcher missed a fresh DHT8 IN because transaction
                 # details were unavailable, the digest can still create the watch/entry.
                 paper_sync_messages.extend(
@@ -180,7 +181,7 @@ def collect_wallet_digest() -> tuple[list[str], list[str], list[str], int, list[
                     )
                 )
 
-                # V4.14 Digest Exit Sync:
+                # V4.16 Digest Exit Sync:
                 # If the digest successfully classifies a DHT8/cluster exit after the
                 # main watcher initially saw it as Unknown, close the matching open
                 # Paper Copy trade immediately from this digest pass.
@@ -218,7 +219,7 @@ def build_wallet_digest_report(
         "🧾 Wallet Cluster 30m Digest",
         "",
         f"Period: last {LOOKBACK_MINUTES} minutes",
-        f"Watched wallets: {len(WATCH_WALLETS)}",
+        f"Watched wallets: {len(get_all_watch_wallets())}",
         f"Total txs found: {total_txs}",
     ]
 
