@@ -7,8 +7,11 @@ from telegram.ext import ContextTypes
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["📊 Status", "🧾 30m Digest"],
-        ["🕵️ Cluster", "📋 Copy Positions"],
-        ["📜 Copy Trades", "💼 Copy Wallet"],
+        ["🕵️ Cluster", "🧠 Cluster Map"],
+        ["📋 Copy Positions", "📜 Copy Trades"],
+        ["💼 Copy Wallet"],
+        ["🔴 Close Copy All"],
+        ["🟡 Close Copy 50%", "🟠 Close Copy 25%"],
         ["📈 Trades", "📌 Positions"],
         ["💼 Wallet"],
     ],
@@ -27,7 +30,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "✅ Meme Bot V3 is live.\n"
         "📡 Auto alerts are enabled.\n"
         "🧾 Wallet digest runs every 30 minutes.\n"
-        "📋 Paper Copy tracking is enabled.\n\n"
+        "📋 Paper Copy tracking is enabled.\n"
+        "🧯 Manual Paper Copy close controls are enabled.\n\n"
         "Use the fixed control panel below, or commands:\n"
         "/status - Bot status and performance\n"
         "/cluster - Wallet cluster watch\n"
@@ -35,6 +39,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/copy_positions - Open Paper Copy positions\n"
         "/copy_trades - Closed Paper Copy trades\n"
         "/copy_wallet - Paper Copy wallet accounting\n"
+        "/copy_close_all - Manual close full Paper Copy position\n"
+        "/copy_close_50 - Manual close 50% of remaining Paper Copy position\n"
+        "/copy_close_25 - Manual close 25% of remaining Paper Copy position\n"
         "/positions - Open original paper trades\n"
         "/trades - Last original closed trades\n"
         "/wallet - Paper wallet summary"
