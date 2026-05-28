@@ -101,7 +101,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.14
+# Paper Copy Mode V4.16
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -124,7 +124,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.14
+# Critical First Init Mode V4.16
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -139,13 +139,13 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "5syp Initial Buyer",
 )
 
-# New Mint Watch V4.14
+# New Mint Watch V4.16
 # DHT8 Distribution IN is not an entry by itself.
 # It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
 NEW_MINT_WATCH_ENABLED = True
 NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
 
-# New Mint Metrics Entry V4.14
+# New Mint Metrics Entry V4.16
 # If DHT8 receives a new mint and the token quickly shows strong DexScreener metrics,
 # open a PAPER trade even if the early buyer wallet is unknown.
 NEW_MINT_METRICS_ENTRY_ENABLED = True
@@ -155,7 +155,7 @@ NEW_MINT_METRICS_MIN_VOLUME_H1_USD = Decimal("50000")
 NEW_MINT_METRICS_MIN_BUYS_H1 = 20
 NEW_MINT_METRICS_MIN_BUY_SELL_RATIO = Decimal("1.20")
 
-# Behavior-Based Detection V4.14
+# Behavior-Based Detection V4.16
 # Do not depend only on names like SPCX / SLX.
 # If DHT8 receives a large allocation and Dex metrics are strong, treat it as a behavior rotation candidate.
 BEHAVIOR_ROTATION_FAMILY = "DHT8 Rotation / Behavior"
@@ -165,7 +165,7 @@ BEHAVIOR_MIN_VOLUME_H1_USD = Decimal("70000")
 BEHAVIOR_MIN_BUYS_H1 = 20
 BEHAVIOR_MIN_BUY_SELL_RATIO = Decimal("1.50")
 
-# Paper profit management V4.14
+# Paper profit management V4.16
 # This is Paper-only partial profit accounting. No real orders are sent.
 PAPER_TP1_PCT = Decimal("50")
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
@@ -177,7 +177,7 @@ TX_DETAILS_RETRY_DELAY_SECONDS = 0.75
 PAPER_NO_TP1_MAX_HOLD_HOURS = Decimal("12")
 PAPER_NO_TP1_MIN_EXIT_PNL = Decimal("5")
 
-# Cluster-Only Kill Signal Exit V4.14
+# Cluster-Only Kill Signal Exit V4.16
 # User rule: exit decisions must be based on group/cluster behavior, not normal market noise.
 # Therefore m5 sell pressure, ordinary buys/sells, price pullbacks, and fast liquidity moves
 # are NOT treated as proactive kill signals anymore. They can still be observed,
@@ -192,21 +192,21 @@ PAPER_PRE_TP1_FAST_LIQUIDITY_DROP_PCT = Decimal("0.15")
 PAPER_M5_SELL_PRESSURE_MULTIPLIER = Decimal("2.0")
 PAPER_M5_SELL_PRESSURE_MIN_SELLS = 5
 
-# Paper Copy Wallet Accounting V4.14
+# Paper Copy Wallet Accounting V4.16
 # Separate from the original /wallet paper system.
 # Each Paper Copy entry is counted as a fixed notional test trade.
 PAPER_COPY_WALLET_STARTING_BALANCE_USD = Decimal("10.00")
 PAPER_COPY_TRADE_SIZE_USD = Decimal("1.00")
 
-# First Big Distribution Exit V4.14
+# First Big Distribution Exit V4.16
 # After a Paper Copy entry, any large Cluster Distribution IN/OUT on the same mint
 # is treated as a final exit signal. This is intentionally aggressive because
 # previous paper trades lost profit after early cluster distribution warnings.
-FIRST_BIG_DISTRIBUTION_EXIT_ENABLED = True
+FIRST_BIG_DISTRIBUTION_EXIT_ENABLED = False
 FIRST_BIG_DISTRIBUTION_SIGNATURE_LIMIT = 20
 FIRST_BIG_DISTRIBUTION_EXIT_LABEL_PREFIX = "Cluster "
 
-# Pending TX Recheck V4.14
+# Pending TX Recheck V4.16
 # If RPC cannot return details for a fresh transaction, keep the signature and
 # re-check it in later cycles. This prevents missing DHT8 IN entries or DHT8 OUT exits.
 PENDING_TX_RECHECK_ENABLED = True
@@ -214,7 +214,7 @@ PENDING_TX_RECHECK_MAX_ATTEMPTS = 8
 PENDING_TX_RECHECK_WINDOW_SECONDS = 20 * 60
 PENDING_TX_RECHECK_BATCH_LIMIT = 20
 
-# Digest Entry Sync V4.14
+# Digest Entry Sync V4.16
 # The 30m digest sometimes classifies transactions that were initially unavailable.
 # Allow recent digest-discovered DHT8 IN to create New Mint Watch / Paper Entry.
 DIGEST_ENTRY_SYNC_ENABLED = True
@@ -348,14 +348,14 @@ def _format_time(block_time: int | None) -> str:
 
 
 def _label_for_wallet(wallet_address: str) -> str:
-    for label, address in WATCH_WALLETS.items():
+    for label, address in get_all_watch_wallets().items():
         if address == wallet_address:
             return label
     return "Unknown Wallet"
 
 
 def _is_watched_wallet(wallet_address: str) -> bool:
-    return wallet_address in WATCH_WALLETS.values()
+    return wallet_address in get_all_watch_wallets().values()
 
 
 def _is_critical_first_init_wallet(label: str) -> bool:
@@ -770,7 +770,7 @@ def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[s
 def fetch_transaction_details(signature: str, attempts: int | None = None, retry_delay_seconds: float | None = None) -> dict[str, Any] | None:
     """Fetch parsed Solana transaction details with short retries.
 
-    V4.14: public RPC can return None for a fresh transaction for a few seconds.
+    V4.16: public RPC can return None for a fresh transaction for a few seconds.
     Retrying here reduces false Unknown traces and helps DHT8 OUT / cluster exits
     trigger before a late liquidity-rug exit.
     """
@@ -1366,7 +1366,7 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# Pending TX Recheck V4.14
+# Pending TX Recheck V4.16
 # ---------------------------------------------------------------------------
 
 def _ensure_pending_tx_table() -> None:
@@ -1491,7 +1491,7 @@ def build_pending_recheck_message(
 
     return "\n".join(
         [
-            "🔁 Pending TX Recheck V4.14",
+            "🔁 Pending TX Recheck V4.16",
             "",
             f"Label: {label}",
             f"Wallet: {_short(wallet_address)}",
@@ -1574,7 +1574,7 @@ def process_pending_unknown_txs() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# New Mint Watch V4.14
+# New Mint Watch V4.16
 # ---------------------------------------------------------------------------
 
 def _ensure_new_mint_watch_table() -> None:
@@ -1761,7 +1761,7 @@ def build_new_mint_watch_message(
 
     return "\n".join(
         [
-            "👀 NEW MINT WATCH V4.14",
+            "👀 NEW MINT WATCH V4.16",
             "",
             f"Token: {symbol}",
             f"Mint: {_short(mint)}",
@@ -1816,7 +1816,7 @@ def maybe_handle_new_mint_watch_signal(
     if "Distribution IN" not in analysis_type:
         return []
 
-    # V4.14: names can change. If token family is unknown but DHT8 received
+    # V4.16: names can change. If token family is unknown but DHT8 received
     # a large allocation, treat it as a behavior-based rotation candidate.
     primary_amount = Decimal("0")
     positive_tokens = [x for x in token_changes if x.get("delta", Decimal("0")) > 0]
@@ -1858,7 +1858,7 @@ def maybe_handle_new_mint_watch_signal(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.14
+# Paper Copy Mode V4.16
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1894,7 +1894,7 @@ def _ensure_paper_copy_table() -> None:
             """
         )
 
-        # V4.14 migration columns for partial TP accounting.
+        # V4.16 migration columns for partial/manual close accounting.
         for column_name, column_type in [
             ("tp1_done", "INTEGER DEFAULT 0"),
             ("tp1_price_usd", "REAL DEFAULT 0"),
@@ -2261,8 +2261,8 @@ def close_paper_copy_trade(
     if tp1_done and tp1_closed_pct > 0:
         lines.extend(
             [
-                f"TP1: {_fmt_decimal(tp1_closed_pct, 0)}% closed at {_fmt_price(_to_decimal(trade.get('tp1_price_usd')))}",
-                f"TP1 PnL: {_fmt_decimal(tp1_pnl_pct, 2)}%",
+                f"Locked before final: {_fmt_decimal(tp1_closed_pct, 2)}%",
+                f"Avg locked PnL: {_fmt_decimal(tp1_pnl_pct, 2)}%",
                 f"Remaining PnL: {_fmt_decimal(remaining_pnl_pct, 2)}%",
                 f"Effective Paper PnL: {_fmt_decimal(effective_pnl_pct, 2)}%",
             ]
@@ -2281,6 +2281,186 @@ def close_paper_copy_trade(
     )
 
     return "\n".join(lines)
+
+
+
+def _select_manual_close_trade(mint_arg: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
+    """Select one open paper copy trade for manual actions.
+
+    If there is exactly one open trade, buttons/commands can work without args.
+    If there are multiple, the user must pass a mint prefix/full mint to avoid closing
+    the wrong trade.
+    """
+    open_trades = list_open_paper_trades()
+
+    if not open_trades:
+        return None, "No open paper copy positions."
+
+    if mint_arg:
+        needle = mint_arg.strip().lower()
+        matches = [
+            trade for trade in open_trades
+            if str(trade.get("mint") or "").lower().startswith(needle)
+            or needle in str(trade.get("mint") or "").lower()
+        ]
+        if len(matches) == 1:
+            return matches[0], None
+        if len(matches) > 1:
+            return None, "More than one open trade matched this mint prefix. Use a longer mint prefix."
+        return None, f"No open paper copy position matched: {mint_arg}"
+
+    if len(open_trades) == 1:
+        return open_trades[0], None
+
+    lines = [
+        "There is more than one open Paper Copy position.",
+        "Use one of these commands with a mint prefix:",
+        "",
+        "/copy_close_all <mint>",
+        "/copy_close_50 <mint>",
+        "/copy_close_25 <mint>",
+        "",
+        "Open positions:",
+    ]
+    for index, trade in enumerate(open_trades, start=1):
+        lines.append(f"{index}) {trade.get('symbol') or 'UNKNOWN'} | {_short(trade.get('mint') or '')}")
+
+    return None, "\n".join(lines)
+
+
+def manual_close_paper_copy_trade(
+    close_remaining_pct: Decimal,
+    mint_arg: str | None = None,
+) -> str:
+    """Manual close for Paper Copy from Telegram buttons/commands.
+
+    close_remaining_pct is a percentage of the CURRENT remaining position, not the
+    original full position. Example: after TP1 closed 50%, /copy_close_50 closes
+    half of the remaining 50%, leaving 25% of the original position open.
+    """
+    _ensure_paper_copy_table()
+
+    if close_remaining_pct <= 0:
+        return "Manual close percentage must be greater than 0."
+
+    if close_remaining_pct > Decimal("100"):
+        close_remaining_pct = Decimal("100")
+
+    trade, error = _select_manual_close_trade(mint_arg)
+    if error:
+        return error
+    if not trade:
+        return "No open paper copy position found."
+
+    mint = trade.get("mint") or ""
+    dex_info = fetch_dex_token_info(mint) or {}
+
+    if close_remaining_pct >= Decimal("99.999"):
+        return close_paper_copy_trade(
+            trade=trade,
+            reason="Manual close from control panel.",
+            signature=None,
+            dex_info=dex_info,
+        )
+
+    entry_price = _to_decimal(trade.get("entry_price_usd"))
+    current_price = dex_info.get("price_usd") or _to_decimal(trade.get("last_price_usd"))
+    current_liquidity = dex_info.get("liquidity_usd") or _to_decimal(trade.get("last_liquidity_usd"))
+    symbol = trade.get("symbol") or dex_info.get("symbol") or TOKEN_ALIASES.get(mint) or "UNKNOWN"
+
+    current_pnl_pct = Decimal("0")
+    if entry_price > 0:
+        current_pnl_pct = ((current_price - entry_price) / entry_price) * Decimal("100")
+
+    old_closed_pct = _to_decimal(trade.get("tp1_closed_pct"))
+    if old_closed_pct < 0:
+        old_closed_pct = Decimal("0")
+    if old_closed_pct > Decimal("100"):
+        old_closed_pct = Decimal("100")
+
+    remaining_pct = Decimal("100") - old_closed_pct
+    if remaining_pct <= Decimal("0.0001"):
+        return close_paper_copy_trade(
+            trade=trade,
+            reason="Manual close from control panel; remaining allocation is already near zero.",
+            signature=None,
+            dex_info=dex_info,
+        )
+
+    close_pct_of_original = remaining_pct * (close_remaining_pct / Decimal("100"))
+    if close_pct_of_original >= remaining_pct - Decimal("0.0001"):
+        return close_paper_copy_trade(
+            trade=trade,
+            reason="Manual close from control panel.",
+            signature=None,
+            dex_info=dex_info,
+        )
+
+    old_avg_locked_pnl = _to_decimal(trade.get("tp1_pnl_pct"))
+    new_closed_pct = old_closed_pct + close_pct_of_original
+    new_avg_locked_pnl = current_pnl_pct
+    if new_closed_pct > 0:
+        new_avg_locked_pnl = (
+            (old_avg_locked_pnl * old_closed_pct) + (current_pnl_pct * close_pct_of_original)
+        ) / new_closed_pct
+
+    now = _now_iso()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE paper_copy_trades
+            SET
+                tp1_done = 1,
+                tp1_closed_pct = ?,
+                tp1_pnl_pct = ?,
+                tp1_price_usd = CASE WHEN COALESCE(tp1_price_usd, 0) > 0 THEN tp1_price_usd ELSE ? END,
+                tp1_at = CASE WHEN COALESCE(tp1_at, '') <> '' THEN tp1_at ELSE ? END,
+                last_price_usd = ?,
+                last_liquidity_usd = ?,
+                peak_price_usd = MAX(peak_price_usd, ?),
+                updated_at = ?
+            WHERE mint = ?
+            AND status = 'OPEN'
+            """,
+            (
+                _to_float(new_closed_pct),
+                _to_float(new_avg_locked_pnl),
+                _to_float(current_price),
+                now,
+                _to_float(current_price),
+                _to_float(current_liquidity),
+                _to_float(current_price),
+                now,
+                mint,
+            ),
+        )
+        conn.commit()
+
+    return "\n".join(
+        [
+            "🟡 PAPER COPY MANUAL PARTIAL CLOSE",
+            "",
+            f"Token: {symbol}",
+            f"Mint: {_short(mint)}",
+            "Action: Manual partial close from control panel.",
+            "",
+            f"Closed now: {_fmt_decimal(close_remaining_pct, 0)}% of remaining position",
+            f"Closed from original: {_fmt_decimal(close_pct_of_original, 2)}%",
+            f"Total locked: {_fmt_decimal(new_closed_pct, 2)}%",
+            f"Remaining open: {_fmt_decimal(Decimal('100') - new_closed_pct, 2)}%",
+            "",
+            f"Entry price: {_fmt_price(entry_price)}",
+            f"Close price: {_fmt_price(current_price)}",
+            f"Close PnL: {_fmt_decimal(current_pnl_pct, 2)}%",
+            f"Avg locked PnL: {_fmt_decimal(new_avg_locked_pnl, 2)}%",
+            f"Liquidity: {_fmt_usd(current_liquidity)}",
+            "",
+            "DexScreener:",
+            dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
+            "",
+            "Mode: Paper only. No real sell was executed.",
+        ]
+    )
 
 
 def update_paper_copy_market(trade: dict[str, Any], dex_info: dict[str, Any]) -> None:
@@ -2422,7 +2602,7 @@ def maybe_close_paper_copy_from_digest_event(
 ) -> list[str]:
     """Close open Paper Copy trades when the digest successfully identifies an exit.
 
-    V4.14: if the main wallet-watch cycle initially saw a fresh tx as Unknown
+    V4.16: if the main wallet-watch cycle initially saw a fresh tx as Unknown
     because RPC details were not available, the 30m digest can later classify it
     as DHT8 OUT / GAMq exit / cluster distribution. This sync prevents waiting
     until a late liquidity-rug exit.
@@ -2527,7 +2707,7 @@ def _is_big_distribution_signal_for_mint(analysis: dict[str, Any], mint: str) ->
 def find_recent_cluster_distribution_for_trade(trade: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
     """Find the first recent Cluster Distribution IN/OUT on the same open mint after entry.
 
-    V4.14 uses this as a defensive final-exit sync, because the cluster often
+    V4.16 uses this as a defensive final-exit sync, because the cluster often
     distributes to wallets like B6ut/FdwJBf before the liquidity collapse.
     """
     if not FIRST_BIG_DISTRIBUTION_EXIT_ENABLED:
@@ -2537,7 +2717,7 @@ def find_recent_cluster_distribution_for_trade(trade: dict[str, Any]) -> tuple[s
     if not mint:
         return None
 
-    for label, wallet_address in WATCH_WALLETS.items():
+    for label, wallet_address in get_all_watch_wallets().items():
         if not _is_cluster_distribution_exit_label(label):
             continue
 
@@ -2637,7 +2817,7 @@ def maybe_handle_paper_copy_signal(
         )
         return messages
 
-    # V4.14 Exit rule 3:
+    # V4.16 Exit rule 3:
     # Any first large cluster distribution on the same open mint after entry is final exit.
     # This protects profit/capital before waiting for liquidity-rug confirmation.
     if open_trade and _is_cluster_distribution_exit_label(label) and _is_big_distribution_signal_for_mint(analysis, mint):
@@ -2760,7 +2940,7 @@ def maybe_handle_digest_paper_sync(
 ) -> list[str]:
     """Allow the digest to sync missed paper entries/exits.
 
-    V4.14: Some fresh DHT8 transactions arrive as RPC Unknown during live watch,
+    V4.16: Some fresh DHT8 transactions arrive as RPC Unknown during live watch,
     then become readable in the digest. This wrapper lets the digest create New
     Mint Watch / Paper Entry or close open trades, while protecting against late entries.
     """
@@ -2914,7 +3094,7 @@ def monitor_paper_copy_trades() -> list[str]:
     for trade in list_open_paper_trades():
         mint = trade["mint"]
 
-        # V4.14 DHT8 OUT Sync:
+        # V4.16 DHT8 OUT Sync:
         # If the normal wallet-watch notification missed the DHT8 OUT, scan recent DHT8 txs
         # before any price/liquidity-based exits. This prevents holding until a late rug exit.
         recent_exit = find_recent_dht8_out_for_trade(trade)
@@ -2931,7 +3111,7 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        # V4.14 Cluster Distribution Sync:
+        # V4.16 Cluster Distribution Sync:
         # If Wallet Watch or digest already saw distribution on an open mint,
         # close immediately instead of waiting for a late liquidity drop.
         recent_cluster_distribution = find_recent_cluster_distribution_for_trade(trade)
@@ -2968,7 +3148,7 @@ def monitor_paper_copy_trades() -> list[str]:
 
         tp1_done = bool(int(trade.get("tp1_done") or 0))
 
-        # V4.14 TP1: lock part of the profit while keeping the remaining paper position open.
+        # V4.16 TP1: lock part of the profit while keeping the remaining paper position open.
         if not tp1_done and pnl_pct >= PAPER_TP1_PCT:
             messages.append(mark_paper_copy_tp1(trade, dex_info))
             refreshed_trade = get_open_paper_trade(mint)
@@ -2976,7 +3156,7 @@ def monitor_paper_copy_trades() -> list[str]:
                 trade = refreshed_trade
             tp1_done = True
 
-        # V4.14 Time Protection:
+        # V4.16 Time Protection:
         # If a behavior/new-mint trade stays open too long without reaching TP1,
         # close a positive trade instead of waiting for the cluster to kill liquidity.
         if (
@@ -2994,7 +3174,7 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        # V4.14 Cluster-Only Kill Signal Exit:
+        # V4.16 Cluster-Only Kill Signal Exit:
         # Do NOT close because of ordinary traders' m5 sells/buys, normal price pullback,
         # or fast liquidity changes. These can be caused by retail noise and produced
         # false early exits while the group was still running the token.
@@ -3083,7 +3263,7 @@ def build_fast_kill_cycle_message(
     symbol = watched.get("symbol") or TOKEN_ALIASES.get(mint) or _token_label(mint)
 
     lines = [
-        "⚡ FAST KILL CYCLE V4.14",
+        "⚡ FAST KILL CYCLE V4.16",
         "",
         f"Token: {symbol}",
         f"Mint: {_short(mint)}",
@@ -3164,7 +3344,7 @@ def build_copy_positions_message() -> str:
                 f"Now: {_fmt_price(snap['current_price'])}",
                 f"Peak: {_fmt_price(snap['peak_price'])}",
                 f"PnL: {_fmt_decimal(snap['pnl_pct'], 2)}%",
-                f"TP1: {'DONE ' + _fmt_decimal(_to_decimal(trade.get('tp1_pnl_pct')), 2) + '%' if int(trade.get('tp1_done') or 0) else 'Not yet'}",
+                f"Locked: {_fmt_decimal(_to_decimal(trade.get('tp1_closed_pct')), 2)}% @ {_fmt_decimal(_to_decimal(trade.get('tp1_pnl_pct')), 2)}% avg" if int(trade.get('tp1_done') or 0) else "Locked: 0%",
                 f"Liquidity: {_fmt_usd(snap['current_liquidity'])}",
                 f"Age: {_age_text_from_iso(trade.get('opened_at'))}",
                 f"Reason: {trade.get('entry_label') or 'N/A'}",
@@ -3224,7 +3404,7 @@ def build_copy_trades_message(limit: int = 10) -> str:
                 f"Entry: {_fmt_price(_to_decimal(trade.get('entry_price_usd')))}",
                 f"Exit: {_fmt_price(_to_decimal(trade.get('exit_price_usd')))}",
                 f"PnL: {_fmt_decimal(pnl, 2)}%",
-                f"TP1: {'DONE ' + _fmt_decimal(_to_decimal(trade.get('tp1_pnl_pct')), 2) + '%' if int(trade.get('tp1_done') or 0) else 'No'}",
+                f"Locked before final: {_fmt_decimal(_to_decimal(trade.get('tp1_closed_pct')), 2)}% @ {_fmt_decimal(_to_decimal(trade.get('tp1_pnl_pct')), 2)}% avg" if int(trade.get('tp1_done') or 0) else "Locked before final: No",
                 f"Duration: {duration}",
                 f"Reason: {trade.get('exit_reason') or 'N/A'}",
                 "DexScreener:",
@@ -3305,7 +3485,8 @@ def build_copy_wallet_message() -> str:
 
         symbol = trade.get("symbol") or (snap.get("dex_info") or {}).get("symbol") or "UNKNOWN"
         mint = trade.get("mint")
-        tp1_text = "DONE" if int(trade.get("tp1_done") or 0) else "NO"
+        locked_pct = _to_decimal(trade.get("tp1_closed_pct"))
+        locked_text = f"{_fmt_decimal(locked_pct, 2)}%" if int(trade.get("tp1_done") or 0) else "0%"
 
         open_lines.extend(
             [
@@ -3313,8 +3494,8 @@ def build_copy_wallet_message() -> str:
                 f"Position size: {_fmt_usd(PAPER_COPY_TRADE_SIZE_USD)} paper",
                 f"Remaining allocated: {_fmt_usd(components['allocated_usd'])}",
                 f"Current PnL: {_fmt_decimal(components['current_pnl_pct'], 2)}%",
-                f"TP1: {tp1_text}",
-                f"Realized from TP1: {_fmt_signed_usd(components['tp1_realized_usd'])}",
+                f"Locked: {locked_text}",
+                f"Realized locked: {_fmt_signed_usd(components['tp1_realized_usd'])}",
                 f"Unrealized: {_fmt_signed_usd(components['unrealized_usd'])}",
                 "",
             ]
@@ -3332,7 +3513,7 @@ def build_copy_wallet_message() -> str:
         total_pnl_pct = (total_pnl_usd / PAPER_COPY_WALLET_STARTING_BALANCE_USD) * Decimal("100")
 
     lines = [
-        "💼 Paper Copy Wallet V4.14",
+        "💼 Paper Copy Wallet V4.16",
         "",
         f"Starting Balance: {_fmt_usd(PAPER_COPY_WALLET_STARTING_BALANCE_USD)}",
         f"Paper Trade Size: {_fmt_usd(PAPER_COPY_TRADE_SIZE_USD)} each",
@@ -3401,7 +3582,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.14",
+        f"{analysis['emoji']} Wallet Watch V4.16",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -3675,7 +3856,7 @@ async def run_wallet_watch_cycle(context) -> None:
         or context.application.bot_data.get("default_chat_id")
     )
 
-    for label, wallet_address in WATCH_WALLETS.items():
+    for label, wallet_address in get_all_watch_wallets().items():
         await asyncio.sleep(0.35)
 
         signatures = fetch_wallet_signatures(wallet_address, limit=10)
@@ -3928,3 +4109,681 @@ async def run_wallet_watch_cycle(context) -> None:
                 text=paper_message,
                 disable_web_page_preview=True,
             )
+
+# ─────────────────────────────────────────────
+# V4.16 — Final Safety Layer
+# Cluster Discovery + Armed Cluster Exit + Manual Controls
+# Key rule:
+#   Cluster IN = ARMED / danger watch only.
+#   Final exit = DHT8 OUT, GAMq OUT/SELL, or OUT/SELL from a cluster recipient
+#   that was armed on the same mint after entry.
+# This avoids early exits caused by normal retail noise or simple internal receipt.
+# ─────────────────────────────────────────────
+
+CLUSTER_DISCOVERY_MIN_AMOUNT = Decimal("650000000")
+CLUSTER_DYNAMIC_WATCH_LIMIT = 45
+CLUSTER_ARMED_STATUS = "ARMED_RECIPIENT"
+
+
+def _ensure_cluster_discovery_tables() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_discovered_wallets (
+                wallet_address TEXT PRIMARY KEY,
+                label TEXT,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                first_mint TEXT,
+                last_mint TEXT,
+                events_count INTEGER DEFAULT 0,
+                in_count INTEGER DEFAULT 0,
+                out_count INTEGER DEFAULT 0,
+                sell_count INTEGER DEFAULT 0,
+                buy_count INTEGER DEFAULT 0,
+                confidence TEXT DEFAULT 'low',
+                role TEXT DEFAULT 'candidate',
+                source TEXT,
+                notes TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_mint_recipients (
+                mint TEXT NOT NULL,
+                wallet_address TEXT NOT NULL,
+                label TEXT,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                in_count INTEGER DEFAULT 0,
+                out_count INTEGER DEFAULT 0,
+                sell_count INTEGER DEFAULT 0,
+                amount_in TEXT DEFAULT '0',
+                amount_out TEXT DEFAULT '0',
+                status TEXT DEFAULT 'WATCH',
+                last_signature TEXT,
+                PRIMARY KEY (mint, wallet_address)
+            )
+            """
+        )
+        conn.commit()
+
+
+def _static_label_for_wallet(wallet_address: str) -> str | None:
+    for label, address in dict(WATCH_WALLETS).items():
+        if address == wallet_address:
+            return label
+    return None
+
+
+def _candidate_label(wallet_address: str) -> str:
+    known = _static_label_for_wallet(wallet_address)
+    if known:
+        return known
+    return f"Candidate Cluster {_short(wallet_address, 4, 4)}"
+
+
+def _cluster_confidence(events_count: int, in_count: int, out_count: int, sell_count: int, buy_count: int) -> str:
+    if out_count > 0 or sell_count > 0:
+        return "high"
+    if events_count >= 2 or in_count >= 2 or buy_count > 0:
+        return "medium"
+    return "low"
+
+
+def _cluster_role(confidence: str, in_count: int, out_count: int, sell_count: int, buy_count: int) -> str:
+    if out_count > 0 or sell_count > 0:
+        return "exit / distribution"
+    if buy_count > 0:
+        return "early buyer"
+    if in_count > 0:
+        return "recipient / distribution"
+    if confidence == "high":
+        return "confirmed cluster"
+    return "candidate"
+
+
+def _cluster_event_kind(analysis: dict[str, Any]) -> str:
+    analysis_type = analysis.get("type", "")
+    if "SELL" in analysis_type:
+        return "SELL"
+    if "BUY" in analysis_type:
+        return "BUY"
+    if "Distribution OUT" in analysis_type or "Transfer OUT" in analysis_type:
+        return "OUT"
+    if "Distribution IN" in analysis_type or "Transfer IN" in analysis_type:
+        return "IN"
+    return "OTHER"
+
+
+def _large_token_amount_for_mint(analysis: dict[str, Any], mint: str) -> Decimal:
+    best = Decimal("0")
+    for change in analysis.get("token_changes") or []:
+        if change.get("mint") != mint:
+            continue
+        amount = abs(_to_decimal(change.get("delta")))
+        if amount > best:
+            best = amount
+    return best
+
+
+def record_cluster_wallet_event(
+    *,
+    label: str,
+    wallet_address: str,
+    mint: str,
+    analysis: dict[str, Any],
+    signature: str = "",
+    source: str = "wallet_watch",
+) -> None:
+    if not wallet_address or not mint:
+        return
+
+    _ensure_cluster_discovery_tables()
+    now = _now_iso()
+    event_kind = _cluster_event_kind(analysis)
+    amount = _large_token_amount_for_mint(analysis, mint)
+
+    known_label = _candidate_label(wallet_address)
+
+    in_inc = 1 if event_kind == "IN" else 0
+    out_inc = 1 if event_kind == "OUT" else 0
+    sell_inc = 1 if event_kind == "SELL" else 0
+    buy_inc = 1 if event_kind == "BUY" else 0
+
+    with get_conn() as conn:
+        current = conn.execute(
+            "SELECT * FROM cluster_discovered_wallets WHERE wallet_address = ?",
+            (wallet_address,),
+        ).fetchone()
+
+        if current:
+            events_count = int(current["events_count"] or 0) + 1
+            in_count = int(current["in_count"] or 0) + in_inc
+            out_count = int(current["out_count"] or 0) + out_inc
+            sell_count = int(current["sell_count"] or 0) + sell_inc
+            buy_count = int(current["buy_count"] or 0) + buy_inc
+            confidence = _cluster_confidence(events_count, in_count, out_count, sell_count, buy_count)
+            role = _cluster_role(confidence, in_count, out_count, sell_count, buy_count)
+
+            conn.execute(
+                """
+                UPDATE cluster_discovered_wallets
+                SET label = ?, last_seen_at = ?, last_mint = ?, events_count = ?,
+                    in_count = ?, out_count = ?, sell_count = ?, buy_count = ?,
+                    confidence = ?, role = ?, source = ?
+                WHERE wallet_address = ?
+                """,
+                (
+                    known_label,
+                    now,
+                    mint,
+                    events_count,
+                    in_count,
+                    out_count,
+                    sell_count,
+                    buy_count,
+                    confidence,
+                    role,
+                    source,
+                    wallet_address,
+                ),
+            )
+        else:
+            events_count = 1
+            confidence = _cluster_confidence(events_count, in_inc, out_inc, sell_inc, buy_inc)
+            role = _cluster_role(confidence, in_inc, out_inc, sell_inc, buy_inc)
+            conn.execute(
+                """
+                INSERT INTO cluster_discovered_wallets (
+                    wallet_address, label, first_seen_at, last_seen_at, first_mint, last_mint,
+                    events_count, in_count, out_count, sell_count, buy_count,
+                    confidence, role, source, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    wallet_address,
+                    known_label,
+                    now,
+                    now,
+                    mint,
+                    mint,
+                    events_count,
+                    in_inc,
+                    out_inc,
+                    sell_inc,
+                    buy_inc,
+                    confidence,
+                    role,
+                    source,
+                    "auto-discovered from cluster behavior",
+                ),
+            )
+
+        if event_kind in {"IN", "OUT", "SELL"}:
+            row = conn.execute(
+                "SELECT * FROM cluster_mint_recipients WHERE mint = ? AND wallet_address = ?",
+                (mint, wallet_address),
+            ).fetchone()
+
+            if row:
+                new_in_count = int(row["in_count"] or 0) + in_inc
+                new_out_count = int(row["out_count"] or 0) + out_inc
+                new_sell_count = int(row["sell_count"] or 0) + sell_inc
+                current_in = _to_decimal(row["amount_in"] or "0")
+                current_out = _to_decimal(row["amount_out"] or "0")
+                status = row["status"] or "WATCH"
+                if event_kind == "IN":
+                    status = CLUSTER_ARMED_STATUS
+                if event_kind in {"OUT", "SELL"}:
+                    status = "EXIT_SIGNAL"
+
+                conn.execute(
+                    """
+                    UPDATE cluster_mint_recipients
+                    SET label = ?, last_seen_at = ?, in_count = ?, out_count = ?, sell_count = ?,
+                        amount_in = ?, amount_out = ?, status = ?, last_signature = ?
+                    WHERE mint = ? AND wallet_address = ?
+                    """,
+                    (
+                        known_label,
+                        now,
+                        new_in_count,
+                        new_out_count,
+                        new_sell_count,
+                        str(current_in + amount if event_kind == "IN" else current_in),
+                        str(current_out + amount if event_kind in {"OUT", "SELL"} else current_out),
+                        status,
+                        signature,
+                        mint,
+                        wallet_address,
+                    ),
+                )
+            else:
+                status = CLUSTER_ARMED_STATUS if event_kind == "IN" else "EXIT_SIGNAL"
+                conn.execute(
+                    """
+                    INSERT INTO cluster_mint_recipients (
+                        mint, wallet_address, label, first_seen_at, last_seen_at,
+                        in_count, out_count, sell_count, amount_in, amount_out,
+                        status, last_signature
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        mint,
+                        wallet_address,
+                        known_label,
+                        now,
+                        now,
+                        in_inc,
+                        out_inc,
+                        sell_inc,
+                        str(amount if event_kind == "IN" else Decimal("0")),
+                        str(amount if event_kind in {"OUT", "SELL"} else Decimal("0")),
+                        status,
+                        signature,
+                    ),
+                )
+
+        conn.commit()
+
+
+def _token_owner_deltas_for_mint(details: dict[str, Any], mint: str) -> dict[str, Decimal]:
+    meta = details.get("meta") or {}
+    pre = meta.get("preTokenBalances") or []
+    post = meta.get("postTokenBalances") or []
+
+    balances: dict[str, Decimal] = {}
+
+    def key(item: dict[str, Any]) -> tuple[str, str] | None:
+        if item.get("mint") != mint:
+            return None
+        owner = item.get("owner")
+        if not owner:
+            return None
+        return owner, str(item.get("accountIndex"))
+
+    pre_map: dict[tuple[str, str], Decimal] = {}
+    post_map: dict[tuple[str, str], Decimal] = {}
+    for item in pre:
+        k = key(item)
+        if k:
+            pre_map[k] = _token_amount_from_balance(item)
+    for item in post:
+        k = key(item)
+        if k:
+            post_map[k] = _token_amount_from_balance(item)
+
+    for k in set(pre_map.keys()) | set(post_map.keys()):
+        owner, _idx = k
+        delta = post_map.get(k, Decimal("0")) - pre_map.get(k, Decimal("0"))
+        balances[owner] = balances.get(owner, Decimal("0")) + delta
+
+    return balances
+
+
+def discover_related_wallets_from_tx(signature: str, mint: str, source_label: str, source_event: str) -> None:
+    if not signature or not mint:
+        return
+
+    details = fetch_transaction_details(signature, attempts=2, retry_delay_seconds=0.25)
+    if not details:
+        return
+
+    owner_deltas = _token_owner_deltas_for_mint(details, mint)
+    for owner, delta in owner_deltas.items():
+        if not owner:
+            continue
+        if owner == DHT8_MAIN_WALLET:
+            continue
+        if abs(delta) < CLUSTER_DISCOVERY_MIN_AMOUNT:
+            continue
+
+        fake_analysis = {
+            "type": "Cluster Distribution IN / Recipient Wallet" if delta > 0 else "Cluster Distribution OUT / Possible Prep for Sell",
+            "token_changes": [{"mint": mint, "delta": delta}],
+        }
+        record_cluster_wallet_event(
+            label=_candidate_label(owner),
+            wallet_address=owner,
+            mint=mint,
+            analysis=fake_analysis,
+            signature=signature,
+            source=f"tx_discovery:{source_label}:{source_event}",
+        )
+
+
+def list_discovered_cluster_wallets(limit: int = 80) -> list[dict[str, Any]]:
+    _ensure_cluster_discovery_tables()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM cluster_discovered_wallets
+            ORDER BY
+                CASE confidence WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                events_count DESC,
+                last_seen_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_watch_wallets() -> dict[str, str]:
+    """Known wallets + discovered medium/high confidence cluster wallets.
+
+    Dynamic wallets are intentionally capped to reduce RPC pressure.
+    """
+    wallets = dict(WATCH_WALLETS)
+    try:
+        discovered = list_discovered_cluster_wallets(limit=CLUSTER_DYNAMIC_WATCH_LIMIT)
+    except Exception:
+        return wallets
+
+    for row in discovered:
+        address = row.get("wallet_address") or ""
+        if not address or address in wallets.values():
+            continue
+        confidence = row.get("confidence") or "low"
+        if confidence not in {"medium", "high"}:
+            continue
+        label = row.get("label") or _candidate_label(address)
+        if not label.startswith("Candidate") and not label.startswith("Cluster"):
+            label = f"Candidate {label}"
+        wallets[label] = address
+
+    return wallets
+
+
+def build_cluster_discovery_message() -> str:
+    known_count = len(WATCH_WALLETS)
+    all_wallets = get_all_watch_wallets()
+    discovered = list_discovered_cluster_wallets(limit=60)
+
+    lines = [
+        "🧠 Cluster Discovery V4.16",
+        "",
+        f"Known wallets: {known_count}",
+        f"Watched including discovered: {len(all_wallets)}",
+        "",
+        "Legend:",
+        "HIGH = exit/sell/out behavior seen",
+        "MEDIUM = repeated recipient/buyer behavior",
+        "LOW = one-time candidate only",
+        "",
+        "Known wallets:",
+    ]
+
+    for label, address in list(WATCH_WALLETS.items())[:35]:
+        lines.append(f"• {label} | {_short(address)}")
+
+    if discovered:
+        lines.extend(["", "Discovered / candidate wallets:"])
+        for row in discovered[:40]:
+            lines.extend(
+                [
+                    f"• {row.get('label') or _short(row.get('wallet_address'))}",
+                    f"  Wallet: {_short(row.get('wallet_address'))}",
+                    f"  Confidence: {(row.get('confidence') or 'low').upper()} | Role: {row.get('role') or 'candidate'}",
+                    f"  Events: {row.get('events_count') or 0} | IN: {row.get('in_count') or 0} | OUT: {row.get('out_count') or 0} | SELL: {row.get('sell_count') or 0}",
+                    f"  Last mint: {_short(row.get('last_mint'))}",
+                    "",
+                ]
+            )
+    else:
+        lines.extend(["", "No discovered wallets yet."])
+
+    lines.extend([
+        "Action:",
+        "The bot monitors known wallets and medium/high discovered wallets.",
+        "Cluster IN = armed watch. Cluster OUT/SELL after IN = emergency exit.",
+    ])
+
+    return "\n".join(lines)
+
+
+def _is_cluster_like_label(label: str) -> bool:
+    return label.startswith("Cluster ") or label.startswith("Candidate Cluster") or label.startswith("Candidate ")
+
+
+def _is_group_exit_signal_for_mint(label: str, analysis: dict[str, Any], mint: str) -> bool:
+    analysis_type = analysis.get("type", "")
+    if label == "DHT8 Main" and "Distribution OUT" in analysis_type:
+        return True
+    if "GAMq" in label and ("SELL" in analysis_type or "Distribution OUT" in analysis_type):
+        return True
+    if _is_cluster_like_label(label) and ("SELL" in analysis_type or "Distribution OUT" in analysis_type or "Transfer OUT" in analysis_type):
+        return _large_token_amount_for_mint(analysis, mint) >= CLUSTER_DISCOVERY_MIN_AMOUNT
+    return False
+
+
+def _is_group_arm_signal_for_mint(label: str, analysis: dict[str, Any], mint: str) -> bool:
+    analysis_type = analysis.get("type", "")
+    if not _is_cluster_like_label(label):
+        return False
+    if "Distribution IN" not in analysis_type and "Transfer IN" not in analysis_type:
+        return False
+    return _large_token_amount_for_mint(analysis, mint) >= CLUSTER_DISCOVERY_MIN_AMOUNT
+
+
+def build_cluster_armed_message(label: str, wallet_address: str, mint: str, signature: str, analysis: dict[str, Any]) -> str:
+    amount = _large_token_amount_for_mint(analysis, mint)
+    return "\n".join(
+        [
+            "🟡 CLUSTER ARMED WATCH V4.16",
+            "",
+            f"Mint: {_short(mint)}",
+            f"Cluster wallet: {label}",
+            f"Wallet: {_short(wallet_address)}",
+            "Detected: Cluster Distribution IN after Paper entry",
+            f"Amount: {_fmt_decimal(amount, 4)}",
+            "",
+            "Meaning:",
+            "This is NOT final exit by itself.",
+            "The wallet is now marked as an armed recipient for this mint.",
+            "",
+            "Final exit trigger:",
+            "If this wallet, DHT8, GAMq, or another cluster wallet starts OUT/SELL on the same mint, close immediately.",
+            "",
+            f"Tx: https://solscan.io/tx/{signature}",
+        ]
+    )
+
+
+# Override: Cluster IN arms the trade; Cluster OUT/SELL exits.
+def maybe_handle_paper_copy_signal(
+    label: str,
+    wallet_address: str,
+    signature: str,
+    analysis: dict[str, Any],
+) -> list[str]:
+    if not PAPER_COPY_ENABLED:
+        return []
+
+    messages: list[str] = []
+    token_changes = analysis.get("token_changes") or []
+    mint = analysis.get("active_mint") or _primary_token_mint(token_changes)
+    if not mint:
+        return messages
+
+    analysis_type = analysis.get("type", "")
+    token_family = analysis.get("token_family") or token_family_for_mint(mint)
+
+    # Record and discover cluster behavior every time we see a large group event.
+    if "Distribution" in analysis_type or "SELL" in analysis_type or "BUY" in analysis_type:
+        if _large_token_amount_for_mint(analysis, mint) >= CLUSTER_DISCOVERY_MIN_AMOUNT or _is_cluster_like_label(label) or label == "DHT8 Main":
+            record_cluster_wallet_event(
+                label=label,
+                wallet_address=wallet_address,
+                mint=mint,
+                analysis=analysis,
+                signature=signature,
+                source="wallet_watch_v4_16",
+            )
+            discover_related_wallets_from_tx(signature, mint, label, analysis_type)
+
+    # DHT8 Distribution IN is still the earliest watch signal.
+    messages.extend(
+        maybe_handle_new_mint_watch_signal(
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis={**analysis, "token_family": token_family},
+        )
+    )
+
+    open_trade = get_open_paper_trade(mint)
+
+    # Mark watched mint as risky when DHT8/GAMq exits before entry.
+    if label == "DHT8 Main" and "Distribution OUT" in analysis_type:
+        watched_for_exit = get_new_mint_watch(mint)
+        if watched_for_exit:
+            fast_kill_message = build_fast_kill_cycle_message(
+                mint=mint,
+                watched=watched_for_exit,
+                signature=signature,
+                analysis=analysis,
+            )
+            if fast_kill_message:
+                messages.append(fast_kill_message)
+            update_new_mint_watch_status(mint=mint, status="EXIT_RISK", last_alert="DHT8_DISTRIBUTION_OUT")
+
+    if "GAMq" in label and ("SELL" in analysis_type or "Distribution OUT" in analysis_type):
+        if get_new_mint_watch(mint):
+            update_new_mint_watch_status(mint=mint, status="GAMQ_EXIT", last_alert="GAMQ_EXIT_ACTIVITY")
+
+    # Final exit: only group-controlled exit behavior on the same mint.
+    if open_trade and _is_group_exit_signal_for_mint(label, analysis, mint):
+        messages.append(
+            close_paper_copy_trade(
+                trade=open_trade,
+                reason=f"First group exit signal on open mint: {label} / {analysis_type}.",
+                signature=signature,
+            )
+        )
+        return messages
+
+    # Cluster IN after entry arms a recipient; it does not close by itself.
+    if open_trade and _is_group_arm_signal_for_mint(label, analysis, mint):
+        record_cluster_wallet_event(
+            label=label,
+            wallet_address=wallet_address,
+            mint=mint,
+            analysis=analysis,
+            signature=signature,
+            source="armed_recipient_after_entry",
+        )
+        messages.append(build_cluster_armed_message(label, wallet_address, mint, signature, analysis))
+        return messages
+
+    if open_trade:
+        return messages
+
+    # Entry rule: known early buyer or behavior-confirmed wallet buys.
+    if not _is_paper_entry_wallet(label):
+        return messages
+    if "BUY" not in analysis_type:
+        return messages
+    if not _is_paper_allowed_family(token_family):
+        return messages
+
+    dex_info = fetch_dex_token_info(mint)
+    if not dex_info:
+        return messages
+    passed, _reason = _paper_entry_quality(dex_info)
+    if not passed:
+        return messages
+
+    watched_mint = get_new_mint_watch(mint)
+    paper_reason = "Early known cluster buyer pattern."
+    if watched_mint:
+        paper_reason = "DHT8 New Mint Watch confirmed by early buyer."
+
+    messages.append(
+        open_paper_copy_trade(
+            mint=mint,
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis={**analysis, "token_family": token_family, "paper_reason": paper_reason},
+            dex_info=dex_info,
+        )
+    )
+    return messages
+
+
+def maybe_close_paper_copy_from_digest_event(
+    label: str,
+    wallet_address: str,
+    tx: dict[str, Any],
+    analysis: dict[str, Any],
+) -> list[str]:
+    if not PAPER_COPY_ENABLED:
+        return []
+    signature = tx.get("signature") or ""
+    if not signature:
+        return []
+
+    token_changes = analysis.get("token_changes") or []
+    mint = analysis.get("active_mint") or _primary_token_mint(token_changes)
+    if not mint:
+        return []
+
+    # Always discover cluster participants from digest too.
+    if "Distribution" in analysis.get("type", "") or "SELL" in analysis.get("type", ""):
+        record_cluster_wallet_event(label=label, wallet_address=wallet_address, mint=mint, analysis=analysis, signature=signature, source="digest_v4_16")
+        discover_related_wallets_from_tx(signature, mint, label, analysis.get("type", ""))
+
+    open_trade = get_open_paper_trade(mint)
+    if not open_trade or not _is_tx_after_trade_open(tx, open_trade):
+        return []
+
+    if _is_group_exit_signal_for_mint(label, analysis, mint):
+        return [
+            close_paper_copy_trade(
+                trade=open_trade,
+                reason=f"Digest group-exit sync on open mint: {label} / {analysis.get('type', '')}.",
+                signature=signature,
+            )
+        ]
+
+    if _is_group_arm_signal_for_mint(label, analysis, mint):
+        record_cluster_wallet_event(label=label, wallet_address=wallet_address, mint=mint, analysis=analysis, signature=signature, source="digest_armed_v4_16")
+        return [build_cluster_armed_message(label, wallet_address, mint, signature, analysis)]
+
+    return []
+
+
+def find_recent_cluster_distribution_for_trade(trade: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
+    """Find recent group OUT/SELL signals only.
+
+    V4.16: Cluster IN arms the trade; it is not final exit. OUT/SELL from
+    any known or discovered cluster wallet on the same mint is final exit.
+    """
+    mint = trade.get("mint")
+    if not mint:
+        return None
+
+    for label, wallet_address in get_all_watch_wallets().items():
+        if label == "DHT8 Main":
+            continue
+        if not _is_cluster_like_label(label) and "GAMq" not in label:
+            continue
+
+        for tx in fetch_wallet_signatures(wallet_address, limit=FIRST_BIG_DISTRIBUTION_SIGNATURE_LIMIT):
+            signature = tx.get("signature") or ""
+            if not signature or not _is_tx_after_trade_open(tx, trade):
+                continue
+            analysis = analyze_transaction(signature, wallet_address)
+
+            # Discover and arm on IN, but do not return exit.
+            if _is_group_arm_signal_for_mint(label, analysis, mint):
+                record_cluster_wallet_event(label=label, wallet_address=wallet_address, mint=mint, analysis=analysis, signature=signature, source="sync_armed_v4_16")
+                continue
+
+            if _is_group_exit_signal_for_mint(label, analysis, mint):
+                return label, signature, analysis
+
+    return None
