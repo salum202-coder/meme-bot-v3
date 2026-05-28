@@ -19,6 +19,10 @@ from telegram_bot.handlers_wallet_watch import (
     copy_positions_handler,
     copy_trades_handler,
     copy_wallet_handler,
+    copy_close_all_handler,
+    copy_close_50_handler,
+    copy_close_25_handler,
+    cluster_map_handler,
 )
 from telegram_bot.handlers_digest import digest_handler
 from telegram_bot.handlers_menu import menu_handler
@@ -39,9 +43,13 @@ def build_bot_application():
     app.add_handler(CommandHandler("trades", trades_handler))
     app.add_handler(CommandHandler("cluster", cluster_handler))
     app.add_handler(CommandHandler("watch_wallets", cluster_handler))
+    app.add_handler(CommandHandler("cluster_map", cluster_map_handler))
     app.add_handler(CommandHandler("copy_positions", copy_positions_handler))
     app.add_handler(CommandHandler("copy_trades", copy_trades_handler))
     app.add_handler(CommandHandler("copy_wallet", copy_wallet_handler))
+    app.add_handler(CommandHandler("copy_close_all", copy_close_all_handler))
+    app.add_handler(CommandHandler("copy_close_50", copy_close_50_handler))
+    app.add_handler(CommandHandler("copy_close_25", copy_close_25_handler))
     app.add_handler(CommandHandler("digest", digest_handler))
     app.add_handler(CallbackQueryHandler(generic_callback_handler))
 
@@ -55,7 +63,7 @@ def build_bot_application():
     app.job_queue.run_repeating(run_position_cycle, interval=settings.position_check_interval_seconds, first=15)
 
     # Wallet Watch - important alerts.
-    app.job_queue.run_repeating(run_wallet_watch_cycle, interval=300, first=25)
+    app.job_queue.run_repeating(run_wallet_watch_cycle, interval=20, first=10)
 
     # Wallet Cluster Digest - summary report every 30 minutes.
     app.job_queue.run_repeating(run_wallet_digest_cycle, interval=1800, first=180)
