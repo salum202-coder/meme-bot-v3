@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 
 from telegram import Update
@@ -25,11 +26,17 @@ def _short(value: str, left: int = 6, right: int = 6) -> str:
     return f"{value[:left]}...{value[-right:]}"
 
 
-async def _reply_long_text(update: Update, text: str, chunk_size: int = 3500) -> None:
+def _set_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+
+async def _reply_long_text(update: Update, text: str, chunk_size: int = 3200) -> None:
     """
     Telegram has a message length limit.
-    This helper splits long reports into safe chunks.
-    Also prevents silent failure when the message is empty.
+    This helper splits long reports into numbered parts:
+    Part 1/2, Part 2/2, etc.
     """
     message = update.effective_message
 
@@ -40,6 +47,7 @@ async def _reply_long_text(update: Update, text: str, chunk_size: int = 3500) ->
         await message.reply_text("No data available yet.")
         return
 
+    chunks: list[str] = []
     lines = text.splitlines()
     current = ""
 
@@ -48,58 +56,66 @@ async def _reply_long_text(update: Update, text: str, chunk_size: int = 3500) ->
 
         if len(next_text) >= chunk_size:
             if current.strip():
-                await message.reply_text(
-                    current.strip(),
-                    disable_web_page_preview=True,
-                )
+                chunks.append(current.strip())
             current = line + "\n"
         else:
             current = next_text
 
     if current.strip():
+        chunks.append(current.strip())
+
+    total = len(chunks)
+
+    for index, chunk in enumerate(chunks, start=1):
+        header = f"Part {index}/{total}\n\n" if total > 1 else ""
+
         await message.reply_text(
-            current.strip(),
+            header + chunk,
             disable_web_page_preview=True,
         )
 
-
-def _set_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = str(update.effective_chat.id)
-    context.application.bot_data["chat_id"] = chat_id
-    context.application.bot_data["default_chat_id"] = chat_id
+        # Small delay to avoid Telegram rate issues when sending multiple parts.
+        if total > 1:
+            await asyncio.sleep(0.4)
 
 
 async def cluster_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _set_chat_id(update, context)
 
-    states = get_wallet_watch_states()
-    state_by_wallet = {item["wallet_address"]: item for item in states}
+    try:
+        states = get_wallet_watch_states()
+        state_by_wallet = {item["wallet_address"]: item for item in states}
 
-    lines = [
-        "🕵️ Wallet Cluster Watch",
-        "",
-        f"Watched wallets: {len(WATCH_WALLETS)}",
-        "Mode: Alerts only",
-        "Auto entry: OFF",
-        "",
-    ]
+        lines = [
+            "🕵️ Wallet Cluster Watch",
+            "",
+            f"Watched wallets: {len(WATCH_WALLETS)}",
+            "Mode: Alerts only",
+            "Auto entry: OFF",
+            "",
+        ]
 
-    for label, wallet in WATCH_WALLETS.items():
-        state = state_by_wallet.get(wallet)
-        last_seen = state.get("last_seen_at") if state else "Not initialized yet"
-        last_sig = state.get("last_signature") if state else None
+        for label, wallet in WATCH_WALLETS.items():
+            state = state_by_wallet.get(wallet)
+            last_seen = state.get("last_seen_at") if state else "Not initialized yet"
+            last_sig = state.get("last_signature") if state else None
 
-        lines.extend(
-            [
-                f"• {label}",
-                f"Wallet: {_short(wallet)}",
-                f"Last seen: {last_seen or 'N/A'}",
-                f"Last tx: {_short(last_sig) if last_sig else 'N/A'}",
-                "",
-            ]
+            lines.extend(
+                [
+                    f"• {label}",
+                    f"Wallet: {_short(wallet)}",
+                    f"Last seen: {last_seen or 'N/A'}",
+                    f"Last tx: {_short(last_sig) if last_sig else 'N/A'}",
+                    "",
+                ]
+            )
+
+        await _reply_long_text(update, "\n".join(lines))
+
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"❌ Cluster error:\n{type(e).__name__}: {e}"
         )
-
-    await _reply_long_text(update, "\n".join(lines))
 
 
 async def copy_positions_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -146,7 +162,10 @@ async def copy_close_all_handler(update: Update, context: ContextTypes.DEFAULT_T
     try:
         await _reply_long_text(
             update,
-            manual_close_paper_copy_trade(Decimal("100"), mint_arg=_first_arg(context)),
+            manual_close_paper_copy_trade(
+                Decimal("100"),
+                mint_arg=_first_arg(context),
+            ),
         )
     except Exception as e:
         await update.effective_message.reply_text(
@@ -160,7 +179,10 @@ async def copy_close_50_handler(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         await _reply_long_text(
             update,
-            manual_close_paper_copy_trade(Decimal("50"), mint_arg=_first_arg(context)),
+            manual_close_paper_copy_trade(
+                Decimal("50"),
+                mint_arg=_first_arg(context),
+            ),
         )
     except Exception as e:
         await update.effective_message.reply_text(
@@ -174,7 +196,10 @@ async def copy_close_25_handler(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         await _reply_long_text(
             update,
-            manual_close_paper_copy_trade(Decimal("25"), mint_arg=_first_arg(context)),
+            manual_close_paper_copy_trade(
+                Decimal("25"),
+                mint_arg=_first_arg(context),
+            ),
         )
     except Exception as e:
         await update.effective_message.reply_text(
