@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -8,6 +10,8 @@ from core.wallet_watcher import (
     build_copy_positions_message,
     build_copy_trades_message,
     build_copy_wallet_message,
+    manual_close_paper_copy_trade,
+    build_cluster_discovery_message,
 )
 from storage.repository_wallet_watch import get_wallet_watch_states
 
@@ -84,5 +88,54 @@ async def copy_wallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text(
         build_copy_wallet_message(),
+        disable_web_page_preview=True,
+    )
+
+
+def _first_arg(context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    args = getattr(context, "args", None) or []
+    return args[0] if args else None
+
+
+async def copy_close_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+    await update.message.reply_text(
+        manual_close_paper_copy_trade(Decimal("100"), mint_arg=_first_arg(context)),
+        disable_web_page_preview=True,
+    )
+
+
+async def copy_close_50_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+    await update.message.reply_text(
+        manual_close_paper_copy_trade(Decimal("50"), mint_arg=_first_arg(context)),
+        disable_web_page_preview=True,
+    )
+
+
+async def copy_close_25_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+    await update.message.reply_text(
+        manual_close_paper_copy_trade(Decimal("25"), mint_arg=_first_arg(context)),
+        disable_web_page_preview=True,
+    )
+
+
+async def cluster_map_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+    await update.message.reply_text(
+        build_cluster_discovery_message(),
         disable_web_page_preview=True,
     )
