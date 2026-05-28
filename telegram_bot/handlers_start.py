@@ -28,7 +28,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context.application.bot_data["default_chat_id"] = chat_id
 
     text = (
-        "✅ Meme Bot V3 is live.\n"
+        "✅ Meme Bot V3 is live. V4.18 MENU FIX\n"
         "📡 Auto alerts are enabled.\n"
         "🧾 Wallet digest runs every 30 minutes.\n"
         "📋 Paper Copy tracking is enabled.\n"
@@ -36,6 +36,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "Use the fixed control panel below, or commands:\n"
         "/status - Bot status and performance\n"
         "/cluster - Wallet cluster watch\n"
+        "/cluster_map - Wallet cluster discovery map\n"
+        "/pattern_brain - Cluster pattern brain learning report\n"
         "/digest - Last 30m wallet digest\n"
         "/copy_positions - Open Paper Copy positions\n"
         "/copy_trades - Closed Paper Copy trades\n"
@@ -48,4 +50,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/wallet - Paper wallet summary"
     )
 
-    await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(
+        text,
+        reply_markup=MAIN_KEYBOARD,
+        disable_web_page_preview=True,
+    )
