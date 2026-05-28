@@ -12,6 +12,7 @@ from core.wallet_watcher import (
     build_copy_wallet_message,
     manual_close_paper_copy_trade,
     build_cluster_discovery_message,
+    build_pattern_brain_message,
 )
 from storage.repository_wallet_watch import get_wallet_watch_states
 
@@ -137,5 +138,16 @@ async def cluster_map_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text(
         build_cluster_discovery_message(),
+        disable_web_page_preview=True,
+    )
+
+
+async def pattern_brain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = str(update.effective_chat.id)
+    context.application.bot_data["chat_id"] = chat_id
+    context.application.bot_data["default_chat_id"] = chat_id
+
+    await update.message.reply_text(
+        build_pattern_brain_message(),
         disable_web_page_preview=True,
     )
