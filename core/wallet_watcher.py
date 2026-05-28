@@ -101,7 +101,7 @@ LIQUIDITY_DROP_ALERT_PCT = Decimal("0.70")
 PRICE_DUMP_FROM_PEAK_PCT = Decimal("0.35")
 PRICE_DUMP_FROM_ENTRY_PCT = Decimal("0.25")
 
-# Paper Copy Mode V4.17
+# Paper Copy Mode V4.18
 # Important: this is PAPER ONLY. No real buy/sell is executed here.
 PAPER_COPY_ENABLED = True
 
@@ -124,7 +124,7 @@ PAPER_TRAILING_DROP_PCT = Decimal("0.30")
 PAPER_LIQUIDITY_RUG_USD = Decimal("1000")
 PAPER_LIQUIDITY_DROP_PCT = Decimal("0.70")
 
-# Critical First Init Mode V4.17
+# Critical First Init Mode V4.18
 # When a newly added high-value wallet has no saved last_signature yet,
 # analyze its latest transaction if it is fresh, instead of silently skipping it.
 CRITICAL_FIRST_INIT_ENABLED = True
@@ -139,33 +139,44 @@ CRITICAL_FIRST_INIT_LABEL_KEYWORDS = (
     "5syp Initial Buyer",
 )
 
-# New Mint Watch V4.17
+# New Mint Watch V4.18
 # DHT8 Distribution IN is not an entry by itself.
 # It only marks a new mint as WATCHING until an Initial Buyer / G8R7 BUY confirms it.
 NEW_MINT_WATCH_ENABLED = True
 NEW_MINT_WATCH_FAMILIES = PAPER_ALLOWED_FAMILIES
 
-# New Mint Metrics Entry V4.17
+# New Mint Metrics Entry V4.18
 # If DHT8 receives a new mint and the token quickly shows strong DexScreener metrics,
 # open a PAPER trade even if the early buyer wallet is unknown.
 NEW_MINT_METRICS_ENTRY_ENABLED = True
 NEW_MINT_METRICS_MAX_AGE_SECONDS = 30 * 60
 NEW_MINT_METRICS_MIN_LIQUIDITY_USD = Decimal("80000")
-NEW_MINT_METRICS_MIN_VOLUME_H1_USD = Decimal("50000")
+NEW_MINT_METRICS_MIN_VOLUME_H1_USD = Decimal("30000")
 NEW_MINT_METRICS_MIN_BUYS_H1 = 20
 NEW_MINT_METRICS_MIN_BUY_SELL_RATIO = Decimal("1.20")
 
-# Behavior-Based Detection V4.17
+# V4.18 Volume Dominance Entry
+# Do not reject a DHT8 new mint just because sell count is higher.
+# A token can have many tiny sells while buy volume in USD dominates.
+# If buy/sell volume is available, use it. If not available, allow a strong
+# positive h1 move + good liquidity/volume as a fallback momentum confirmation.
+NEW_MINT_METRICS_VOLUME_DOMINANCE_ENABLED = True
+NEW_MINT_METRICS_MIN_BUY_VOLUME_RATIO = Decimal("2.0")
+NEW_MINT_METRICS_MIN_PRICE_CHANGE_H1_PCT = Decimal("10")
+
+# Behavior-Based Detection V4.18
 # Do not depend only on names like SPCX / SLX.
 # If DHT8 receives a large allocation and Dex metrics are strong, treat it as a behavior rotation candidate.
 BEHAVIOR_ROTATION_FAMILY = "DHT8 Rotation / Behavior"
 BEHAVIOR_DHT8_MIN_TOKEN_AMOUNT = Decimal("700000000")
 BEHAVIOR_MIN_LIQUIDITY_USD = Decimal("100000")
-BEHAVIOR_MIN_VOLUME_H1_USD = Decimal("70000")
+BEHAVIOR_MIN_VOLUME_H1_USD = Decimal("50000")
 BEHAVIOR_MIN_BUYS_H1 = 20
 BEHAVIOR_MIN_BUY_SELL_RATIO = Decimal("1.50")
+BEHAVIOR_MIN_BUY_VOLUME_RATIO = Decimal("2.0")
+BEHAVIOR_MIN_PRICE_CHANGE_H1_PCT = Decimal("10")
 
-# Paper profit management V4.17
+# Paper profit management V4.18
 # This is Paper-only partial profit accounting. No real orders are sent.
 PAPER_TP1_PCT = Decimal("50")
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
@@ -177,7 +188,7 @@ TX_DETAILS_RETRY_DELAY_SECONDS = 0.75
 PAPER_NO_TP1_MAX_HOLD_HOURS = Decimal("12")
 PAPER_NO_TP1_MIN_EXIT_PNL = Decimal("5")
 
-# Cluster-Only Kill Signal Exit V4.17
+# Cluster-Only Kill Signal Exit V4.18
 # User rule: exit decisions must be based on group/cluster behavior, not normal market noise.
 # Therefore m5 sell pressure, ordinary buys/sells, price pullbacks, and fast liquidity moves
 # are NOT treated as proactive kill signals anymore. They can still be observed,
@@ -192,13 +203,13 @@ PAPER_PRE_TP1_FAST_LIQUIDITY_DROP_PCT = Decimal("0.15")
 PAPER_M5_SELL_PRESSURE_MULTIPLIER = Decimal("2.0")
 PAPER_M5_SELL_PRESSURE_MIN_SELLS = 5
 
-# Paper Copy Wallet Accounting V4.17
+# Paper Copy Wallet Accounting V4.18
 # Separate from the original /wallet paper system.
 # Each Paper Copy entry is counted as a fixed notional test trade.
 PAPER_COPY_WALLET_STARTING_BALANCE_USD = Decimal("10.00")
 PAPER_COPY_TRADE_SIZE_USD = Decimal("1.00")
 
-# First Big Distribution Exit V4.17
+# First Big Distribution Exit V4.18
 # After a Paper Copy entry, any large Cluster Distribution IN/OUT on the same mint
 # is treated as a final exit signal. This is intentionally aggressive because
 # previous paper trades lost profit after early cluster distribution warnings.
@@ -206,7 +217,7 @@ FIRST_BIG_DISTRIBUTION_EXIT_ENABLED = False
 FIRST_BIG_DISTRIBUTION_SIGNATURE_LIMIT = 20
 FIRST_BIG_DISTRIBUTION_EXIT_LABEL_PREFIX = "Cluster "
 
-# Pending TX Recheck V4.17
+# Pending TX Recheck V4.18
 # If RPC cannot return details for a fresh transaction, keep the signature and
 # re-check it in later cycles. This prevents missing DHT8 IN entries or DHT8 OUT exits.
 PENDING_TX_RECHECK_ENABLED = True
@@ -214,7 +225,7 @@ PENDING_TX_RECHECK_MAX_ATTEMPTS = 8
 PENDING_TX_RECHECK_WINDOW_SECONDS = 20 * 60
 PENDING_TX_RECHECK_BATCH_LIMIT = 20
 
-# Digest Entry Sync V4.17
+# Digest Entry Sync V4.18
 # The 30m digest sometimes classifies transactions that were initially unavailable.
 # Allow recent digest-discovered DHT8 IN to create New Mint Watch / Paper Entry.
 DIGEST_ENTRY_SYNC_ENABLED = True
@@ -639,6 +650,33 @@ def fetch_dex_token_info(mint: str) -> dict[str, Any] | None:
     txns_m15 = txns.get("m15") or {}
     txns_h1 = txns.get("h1") or {}
 
+    # V4.18: DexScreener UI shows buy/sell volume, but not every API response
+    # exposes it with the same key names. Keep this flexible and harmless.
+    buy_volume = pair.get("buyVolume") or pair.get("buy_volume") or pair.get("buyVol") or pair.get("buy_vol") or {}
+    sell_volume = pair.get("sellVolume") or pair.get("sell_volume") or pair.get("sellVol") or pair.get("sell_vol") or {}
+    volume_buy = pair.get("volumeBuy") or pair.get("volume_buy") or {}
+    volume_sell = pair.get("volumeSell") or pair.get("volume_sell") or {}
+
+    def _period_volume(source: Any, period: str) -> Any:
+        if isinstance(source, dict):
+            return source.get(period) or source.get(period.upper())
+        return source
+
+    buy_volume_h1 = (
+        _period_volume(buy_volume, "h1")
+        or _period_volume(volume_buy, "h1")
+        or txns_h1.get("buyVolume")
+        or txns_h1.get("buy_volume")
+        or txns_h1.get("buyVol")
+    )
+    sell_volume_h1 = (
+        _period_volume(sell_volume, "h1")
+        or _period_volume(volume_sell, "h1")
+        or txns_h1.get("sellVolume")
+        or txns_h1.get("sell_volume")
+        or txns_h1.get("sellVol")
+    )
+
     pair_created_at = pair.get("pairCreatedAt")
     pair_age_seconds = None
     try:
@@ -670,6 +708,8 @@ def fetch_dex_token_info(mint: str) -> dict[str, Any] | None:
         "sells_m15": int(txns_m15.get("sells") or 0),
         "buys_h1": int(txns_h1.get("buys") or 0),
         "sells_h1": int(txns_h1.get("sells") or 0),
+        "buy_volume_h1": _to_decimal(buy_volume_h1),
+        "sell_volume_h1": _to_decimal(sell_volume_h1),
         "url": pair.get("url") or f"https://dexscreener.com/solana/{mint}",
         "pair_created_at": pair_created_at,
         "pair_age_seconds": pair_age_seconds,
@@ -770,7 +810,7 @@ def fetch_wallet_signatures(wallet_address: str, limit: int = 10) -> list[dict[s
 def fetch_transaction_details(signature: str, attempts: int | None = None, retry_delay_seconds: float | None = None) -> dict[str, Any] | None:
     """Fetch parsed Solana transaction details with short retries.
 
-    V4.17: public RPC can return None for a fresh transaction for a few seconds.
+    V4.18: public RPC can return None for a fresh transaction for a few seconds.
     Retrying here reduces false Unknown traces and helps DHT8 OUT / cluster exits
     trigger before a late liquidity-rug exit.
     """
@@ -1366,7 +1406,7 @@ def maybe_register_active_token(
 
 
 # ---------------------------------------------------------------------------
-# Pending TX Recheck V4.17
+# Pending TX Recheck V4.18
 # ---------------------------------------------------------------------------
 
 def _ensure_pending_tx_table() -> None:
@@ -1491,7 +1531,7 @@ def build_pending_recheck_message(
 
     return "\n".join(
         [
-            "🔁 Pending TX Recheck V4.17",
+            "🔁 Pending TX Recheck V4.18",
             "",
             f"Label: {label}",
             f"Wallet: {_short(wallet_address)}",
@@ -1574,7 +1614,7 @@ def process_pending_unknown_txs() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# New Mint Watch V4.17
+# New Mint Watch V4.18
 # ---------------------------------------------------------------------------
 
 def _ensure_new_mint_watch_table() -> None:
@@ -1761,7 +1801,7 @@ def build_new_mint_watch_message(
 
     return "\n".join(
         [
-            "👀 NEW MINT WATCH V4.17",
+            "👀 NEW MINT WATCH V4.18",
             "",
             f"Token: {symbol}",
             f"Mint: {_short(mint)}",
@@ -1816,7 +1856,7 @@ def maybe_handle_new_mint_watch_signal(
     if "Distribution IN" not in analysis_type:
         return []
 
-    # V4.17: names can change. If token family is unknown but DHT8 received
+    # V4.18: names can change. If token family is unknown but DHT8 received
     # a large allocation, treat it as a behavior-based rotation candidate.
     primary_amount = Decimal("0")
     positive_tokens = [x for x in token_changes if x.get("delta", Decimal("0")) > 0]
@@ -1858,7 +1898,7 @@ def maybe_handle_new_mint_watch_signal(
 
 
 # ---------------------------------------------------------------------------
-# Paper Copy Mode V4.17
+# Paper Copy Mode V4.18
 # ---------------------------------------------------------------------------
 
 def _ensure_paper_copy_table() -> None:
@@ -1894,7 +1934,7 @@ def _ensure_paper_copy_table() -> None:
             """
         )
 
-        # V4.17 migration columns for partial/manual close accounting.
+        # V4.18 migration columns for partial/manual close accounting.
         for column_name, column_type in [
             ("tp1_done", "INTEGER DEFAULT 0"),
             ("tp1_price_usd", "REAL DEFAULT 0"),
@@ -2021,6 +2061,45 @@ def _paper_buy_sell_ratio(dex_info: dict[str, Any]) -> Decimal:
         return buys if buys > 0 else Decimal("0")
 
     return buys / sells
+
+
+def _paper_buy_sell_volume_ratio(dex_info: dict[str, Any]) -> Decimal:
+    buy_volume = dex_info.get("buy_volume_h1") or Decimal("0")
+    sell_volume = dex_info.get("sell_volume_h1") or Decimal("0")
+
+    if sell_volume <= 0:
+        return buy_volume if buy_volume > 0 else Decimal("0")
+
+    return buy_volume / sell_volume
+
+
+def _has_buy_volume_data(dex_info: dict[str, Any]) -> bool:
+    return (dex_info.get("buy_volume_h1") or Decimal("0")) > 0 or (dex_info.get("sell_volume_h1") or Decimal("0")) > 0
+
+
+def _is_volume_dominance_entry(
+    dex_info: dict[str, Any],
+    *,
+    min_buy_volume_ratio: Decimal,
+    min_price_change_h1_pct: Decimal,
+) -> tuple[bool, str]:
+    if not NEW_MINT_METRICS_VOLUME_DOMINANCE_ENABLED:
+        return False, "Volume dominance disabled."
+
+    price_change_h1 = dex_info.get("price_change_h1") or Decimal("0")
+    volume_ratio = _paper_buy_sell_volume_ratio(dex_info)
+
+    if _has_buy_volume_data(dex_info):
+        if volume_ratio >= min_buy_volume_ratio:
+            return True, f"Buy volume dominance passed ({_fmt_decimal(volume_ratio, 2)}x)."
+        return False, f"Buy volume ratio below {_fmt_decimal(min_buy_volume_ratio, 2)}x."
+
+    # Fallback when API does not expose buy/sell volume: use strong positive h1
+    # momentum. This catches cases like many small sells but larger hidden buys.
+    if price_change_h1 >= min_price_change_h1_pct:
+        return True, f"Positive h1 momentum fallback passed ({_fmt_decimal(price_change_h1, 2)}%)."
+
+    return False, f"Price change h1 below {_fmt_decimal(min_price_change_h1_pct, 2)}%."
 
 
 def _paper_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
@@ -2177,7 +2256,10 @@ def open_paper_copy_trade(
             f"Liquidity: {_fmt_usd(liquidity)}",
             f"Volume 1H: {_fmt_usd(volume_h1)}",
             f"Buys/Sells 1H: {buys_h1}/{sells_h1}",
-            f"Buy/Sell Ratio: {_fmt_decimal(_paper_buy_sell_ratio(dex_info), 2)}x",
+            f"Buy/Sell Count Ratio: {_fmt_decimal(_paper_buy_sell_ratio(dex_info), 2)}x",
+            f"Buy/Sell Volume Ratio: {_fmt_decimal(_paper_buy_sell_volume_ratio(dex_info), 2)}x"
+            if _has_buy_volume_data(dex_info) else
+            f"H1 Momentum Fallback: {_fmt_decimal(dex_info.get('price_change_h1') or Decimal('0'), 2)}%",
             "",
             "DexScreener:",
             dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
@@ -2602,7 +2684,7 @@ def maybe_close_paper_copy_from_digest_event(
 ) -> list[str]:
     """Close open Paper Copy trades when the digest successfully identifies an exit.
 
-    V4.17: if the main wallet-watch cycle initially saw a fresh tx as Unknown
+    V4.18: if the main wallet-watch cycle initially saw a fresh tx as Unknown
     because RPC details were not available, the 30m digest can later classify it
     as DHT8 OUT / GAMq exit / cluster distribution. This sync prevents waiting
     until a late liquidity-rug exit.
@@ -2707,7 +2789,7 @@ def _is_big_distribution_signal_for_mint(analysis: dict[str, Any], mint: str) ->
 def find_recent_cluster_distribution_for_trade(trade: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
     """Find the first recent Cluster Distribution IN/OUT on the same open mint after entry.
 
-    V4.17 uses this as a defensive final-exit sync, because the cluster often
+    V4.18 uses this as a defensive final-exit sync, because the cluster often
     distributes to wallets like B6ut/FdwJBf before the liquidity collapse.
     """
     if not FIRST_BIG_DISTRIBUTION_EXIT_ENABLED:
@@ -2817,7 +2899,7 @@ def maybe_handle_paper_copy_signal(
         )
         return messages
 
-    # V4.17 Exit rule 3:
+    # V4.18 Exit rule 3:
     # Any first large cluster distribution on the same open mint after entry is final exit.
     # This protects profit/capital before waiting for liquidity-rug confirmation.
     if open_trade and _is_cluster_distribution_exit_label(label) and _is_big_distribution_signal_for_mint(analysis, mint):
@@ -2895,7 +2977,17 @@ def _new_mint_metrics_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str
         return False, f"Buys 1H below {NEW_MINT_METRICS_MIN_BUYS_H1}."
 
     if ratio < NEW_MINT_METRICS_MIN_BUY_SELL_RATIO:
-        return False, f"Buy/Sell ratio below {_fmt_decimal(NEW_MINT_METRICS_MIN_BUY_SELL_RATIO, 2)}x."
+        volume_passed, volume_reason = _is_volume_dominance_entry(
+            dex_info,
+            min_buy_volume_ratio=NEW_MINT_METRICS_MIN_BUY_VOLUME_RATIO,
+            min_price_change_h1_pct=NEW_MINT_METRICS_MIN_PRICE_CHANGE_H1_PCT,
+        )
+        if not volume_passed:
+            return False, (
+                f"Buy/Sell count ratio below {_fmt_decimal(NEW_MINT_METRICS_MIN_BUY_SELL_RATIO, 2)}x "
+                f"and volume dominance not confirmed: {volume_reason}"
+            )
+        return True, f"New mint volume dominance entry quality passed. {volume_reason}"
 
     return True, "New mint metrics entry quality passed."
 
@@ -2925,7 +3017,17 @@ def _behavior_rotation_metrics_entry_quality(dex_info: dict[str, Any]) -> tuple[
         return False, f"Behavior buys 1H below {BEHAVIOR_MIN_BUYS_H1}."
 
     if ratio < BEHAVIOR_MIN_BUY_SELL_RATIO:
-        return False, f"Behavior Buy/Sell ratio below {_fmt_decimal(BEHAVIOR_MIN_BUY_SELL_RATIO, 2)}x."
+        volume_passed, volume_reason = _is_volume_dominance_entry(
+            dex_info,
+            min_buy_volume_ratio=BEHAVIOR_MIN_BUY_VOLUME_RATIO,
+            min_price_change_h1_pct=BEHAVIOR_MIN_PRICE_CHANGE_H1_PCT,
+        )
+        if not volume_passed:
+            return False, (
+                f"Behavior Buy/Sell count ratio below {_fmt_decimal(BEHAVIOR_MIN_BUY_SELL_RATIO, 2)}x "
+                f"and volume dominance not confirmed: {volume_reason}"
+            )
+        return True, f"Behavior volume dominance entry quality passed. {volume_reason}"
 
     return True, "Behavior-based rotation metrics entry quality passed."
 
@@ -2940,7 +3042,7 @@ def maybe_handle_digest_paper_sync(
 ) -> list[str]:
     """Allow the digest to sync missed paper entries/exits.
 
-    V4.17: Some fresh DHT8 transactions arrive as RPC Unknown during live watch,
+    V4.18: Some fresh DHT8 transactions arrive as RPC Unknown during live watch,
     then become readable in the digest. This wrapper lets the digest create New
     Mint Watch / Paper Entry or close open trades, while protecting against late entries.
     """
@@ -3022,7 +3124,12 @@ def monitor_new_mint_metric_entries() -> list[str]:
             update_new_mint_watch_checked(mint)
             continue
 
-        paper_reason = "DHT8 New Mint Watch + strong Dex metrics; early buyers may be unknown."
+        ratio = _paper_buy_sell_ratio(dex_info)
+        volume_ratio = _paper_buy_sell_volume_ratio(dex_info)
+        if ratio < NEW_MINT_METRICS_MIN_BUY_SELL_RATIO and (volume_ratio > 0 or (dex_info.get("price_change_h1") or Decimal("0")) > 0):
+            paper_reason = "DHT8 New Mint Watch + volume-dominance / momentum metrics; early buyers may be unknown."
+        else:
+            paper_reason = "DHT8 New Mint Watch + strong Dex metrics; early buyers may be unknown."
         if _is_behavior_rotation_family(token_family):
             paper_reason = "Behavior-based DHT8 rotation + strong Dex metrics; token name may be new/unknown."
 
@@ -3094,7 +3201,7 @@ def monitor_paper_copy_trades() -> list[str]:
     for trade in list_open_paper_trades():
         mint = trade["mint"]
 
-        # V4.17 DHT8 OUT Sync:
+        # V4.18 DHT8 OUT Sync:
         # If the normal wallet-watch notification missed the DHT8 OUT, scan recent DHT8 txs
         # before any price/liquidity-based exits. This prevents holding until a late rug exit.
         recent_exit = find_recent_dht8_out_for_trade(trade)
@@ -3111,7 +3218,7 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        # V4.17 Cluster Distribution Sync:
+        # V4.18 Cluster Distribution Sync:
         # If Wallet Watch or digest already saw distribution on an open mint,
         # close immediately instead of waiting for a late liquidity drop.
         recent_cluster_distribution = find_recent_cluster_distribution_for_trade(trade)
@@ -3148,7 +3255,7 @@ def monitor_paper_copy_trades() -> list[str]:
 
         tp1_done = bool(int(trade.get("tp1_done") or 0))
 
-        # V4.17 TP1: lock part of the profit while keeping the remaining paper position open.
+        # V4.18 TP1: lock part of the profit while keeping the remaining paper position open.
         if not tp1_done and pnl_pct >= PAPER_TP1_PCT:
             messages.append(mark_paper_copy_tp1(trade, dex_info))
             refreshed_trade = get_open_paper_trade(mint)
@@ -3156,7 +3263,7 @@ def monitor_paper_copy_trades() -> list[str]:
                 trade = refreshed_trade
             tp1_done = True
 
-        # V4.17 Time Protection:
+        # V4.18 Time Protection:
         # If a behavior/new-mint trade stays open too long without reaching TP1,
         # close a positive trade instead of waiting for the cluster to kill liquidity.
         if (
@@ -3174,7 +3281,7 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        # V4.17 Cluster-Only Kill Signal Exit:
+        # V4.18 Cluster-Only Kill Signal Exit:
         # Do NOT close because of ordinary traders' m5 sells/buys, normal price pullback,
         # or fast liquidity changes. These can be caused by retail noise and produced
         # false early exits while the group was still running the token.
@@ -3263,7 +3370,7 @@ def build_fast_kill_cycle_message(
     symbol = watched.get("symbol") or TOKEN_ALIASES.get(mint) or _token_label(mint)
 
     lines = [
-        "⚡ FAST KILL CYCLE V4.17",
+        "⚡ FAST KILL CYCLE V4.18",
         "",
         f"Token: {symbol}",
         f"Mint: {_short(mint)}",
@@ -3513,7 +3620,7 @@ def build_copy_wallet_message() -> str:
         total_pnl_pct = (total_pnl_usd / PAPER_COPY_WALLET_STARTING_BALANCE_USD) * Decimal("100")
 
     lines = [
-        "💼 Paper Copy Wallet V4.17",
+        "💼 Paper Copy Wallet V4.18",
         "",
         f"Starting Balance: {_fmt_usd(PAPER_COPY_WALLET_STARTING_BALANCE_USD)}",
         f"Paper Trade Size: {_fmt_usd(PAPER_COPY_TRADE_SIZE_USD)} each",
@@ -3582,7 +3689,7 @@ def build_wallet_activity_summary(
     token_family = analysis.get("token_family") or token_family_for_mint(primary_mint)
 
     lines = [
-        f"{analysis['emoji']} Wallet Watch V4.17",
+        f"{analysis['emoji']} Wallet Watch V4.18",
         "",
         f"Label: {label}",
         f"Wallet: {_short(wallet_address)}",
@@ -4111,7 +4218,7 @@ async def run_wallet_watch_cycle(context) -> None:
             )
 
 # ─────────────────────────────────────────────
-# V4.17 — Final Safety Layer
+# V4.18 — Final Safety Layer
 # Cluster Discovery + Armed Cluster Exit + Manual Controls
 # Key rule:
 #   Cluster IN = ARMED / danger watch only.
@@ -4503,7 +4610,7 @@ def build_cluster_discovery_message() -> str:
     discovered = list_discovered_cluster_wallets(limit=60)
 
     lines = [
-        "🧠 Cluster Discovery V4.17",
+        "🧠 Cluster Discovery V4.18",
         "",
         f"Known wallets: {known_count}",
         f"Watched including discovered: {len(all_wallets)}",
@@ -4572,7 +4679,7 @@ def build_cluster_armed_message(label: str, wallet_address: str, mint: str, sign
     amount = _large_token_amount_for_mint(analysis, mint)
     return "\n".join(
         [
-            "🟡 CLUSTER ARMED WATCH V4.17",
+            "🟡 CLUSTER ARMED WATCH V4.18",
             "",
             f"Mint: {_short(mint)}",
             f"Cluster wallet: {label}",
@@ -4759,7 +4866,7 @@ def maybe_close_paper_copy_from_digest_event(
 def find_recent_cluster_distribution_for_trade(trade: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
     """Find recent group OUT/SELL signals only.
 
-    V4.17: Cluster IN arms the trade; it is not final exit. OUT/SELL from
+    V4.18: Cluster IN arms the trade; it is not final exit. OUT/SELL from
     any known or discovered cluster wallet on the same mint is final exit.
     """
     mint = trade.get("mint")
@@ -4789,7 +4896,7 @@ def find_recent_cluster_distribution_for_trade(trade: dict[str, Any]) -> tuple[s
     return None
 
 # ─────────────────────────────────────────────
-# V4.17 — Cluster Pattern Brain / Passive Learning
+# V4.18 — Cluster Pattern Brain / Passive Learning
 # This layer DOES NOT change entry or exit decisions.
 # It records event timelines and builds wallet danger scores so we can learn
 # how the group behaves across mints before using the scores in a future version.
@@ -5212,7 +5319,7 @@ def build_pattern_brain_message() -> str:
         ).fetchall()
 
     lines = [
-        "🧠 Cluster Pattern Brain V4.17",
+        "🧠 Cluster Pattern Brain V4.18",
         "",
         "Mode: Passive learning only. No entry/exit decisions changed.",
         f"Pattern events recorded: {total_events}",
@@ -5263,7 +5370,7 @@ def build_pattern_brain_message() -> str:
             "How to use:",
             "- High score OUT/SELL wallets are likely exit/risk wallets.",
             "- IN-only wallets are usually armed watch, not automatic exit.",
-            "- V4.17 only observes. V4.18 can use these scores after enough data.",
+            "- V4.18 only observes. V4.18 can use these scores after enough data.",
         ]
     )
     return "\n".join(lines)
