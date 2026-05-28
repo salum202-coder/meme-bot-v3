@@ -13,6 +13,7 @@ from telegram_bot.handlers_wallet_watch import (
     copy_close_50_handler,
     copy_close_25_handler,
     cluster_map_handler,
+    pattern_brain_handler,
 )
 from telegram_bot.handlers_trades import trades_handler
 from telegram_bot.handlers_positions import positions_handler
@@ -41,6 +42,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if text == "🧠 Cluster Map":
         await cluster_map_handler(update, context)
+        return
+
+    if text == "🧠 Pattern Brain":
+        await pattern_brain_handler(update, context)
         return
 
     if text == "📜 Copy Trades":
