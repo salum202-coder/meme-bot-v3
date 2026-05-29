@@ -178,10 +178,24 @@ BEHAVIOR_MIN_PRICE_CHANGE_H1_PCT = Decimal("10")
 
 # Paper profit management V4.18
 # This is Paper-only partial profit accounting. No real orders are sent.
+# Paper profit management V4.19
+# This is Paper-only partial profit accounting. No real orders are sent.
 PAPER_TP1_PCT = Decimal("50")
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
 PAPER_AFTER_TP1_PROFIT_LOCK_PCT = Decimal("0.10")
 PAPER_TRAILING_AFTER_TP1_DROP_PCT = Decimal("0.12")
+
+# V4.19 — Profit Protection
+# After TP1, lock more profit instead of leaving 50% exposed until rug.
+PAPER_TP2_PCT = Decimal("60")
+PAPER_TP2_TOTAL_LOCKED_PERCENT = Decimal("75")
+
+# If TP1 happened and the trade stays open too long while still profitable,
+# close the remaining position before late-cycle rug risk.
+PAPER_AFTER_TP1_TIME_PROTECTION_ENABLED = True
+PAPER_AFTER_TP1_MAX_HOLD_HOURS = Decimal("8")
+PAPER_AFTER_TP1_MIN_EXIT_PNL = Decimal("10")
+
 DHT8_EXIT_SYNC_SIGNATURE_LIMIT = 60
 TX_DETAILS_RETRY_ATTEMPTS = 4
 TX_DETAILS_RETRY_DELAY_SECONDS = 0.75
@@ -2650,7 +2664,100 @@ def mark_paper_copy_tp1(
             "Mode: Paper only. No real sell was executed.",
         ]
     )
+def mark_paper_copy_tp2(
+    trade: dict[str, Any],
+    dex_info: dict[str, Any],
+) -> str:
+    _ensure_paper_copy_table()
 
+    mint = trade["mint"]
+    now = _now_iso()
+    symbol = trade.get("symbol") or dex_info.get("symbol") or TOKEN_ALIASES.get(mint) or "UNKNOWN"
+    entry_price = _to_decimal(trade.get("entry_price_usd"))
+    tp2_price = dex_info.get("price_usd") or _to_decimal(trade.get("last_price_usd"))
+    liquidity = dex_info.get("liquidity_usd") or _to_decimal(trade.get("last_liquidity_usd"))
+
+    old_closed_pct = _to_decimal(trade.get("tp1_closed_pct"))
+    old_avg_locked_pnl = _to_decimal(trade.get("tp1_pnl_pct"))
+
+    if old_closed_pct >= PAPER_TP2_TOTAL_LOCKED_PERCENT:
+        return ""
+
+    tp2_pnl_pct = Decimal("0")
+    if entry_price > 0:
+        tp2_pnl_pct = ((tp2_price - entry_price) / entry_price) * Decimal("100")
+
+    close_now_pct = PAPER_TP2_TOTAL_LOCKED_PERCENT - old_closed_pct
+    if close_now_pct <= 0:
+        return ""
+
+    new_closed_pct = PAPER_TP2_TOTAL_LOCKED_PERCENT
+    new_avg_locked_pnl = tp2_pnl_pct
+
+    if new_closed_pct > 0:
+        new_avg_locked_pnl = (
+            (old_avg_locked_pnl * old_closed_pct) + (tp2_pnl_pct * close_now_pct)
+        ) / new_closed_pct
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE paper_copy_trades
+            SET
+                tp1_done = 1,
+                tp1_closed_pct = ?,
+                tp1_pnl_pct = ?,
+                tp1_price_usd = CASE WHEN COALESCE(tp1_price_usd, 0) > 0 THEN tp1_price_usd ELSE ? END,
+                tp1_at = CASE WHEN COALESCE(tp1_at, '') <> '' THEN tp1_at ELSE ? END,
+                last_price_usd = ?,
+                last_liquidity_usd = ?,
+                peak_price_usd = MAX(peak_price_usd, ?),
+                updated_at = ?
+            WHERE mint = ?
+            AND status = 'OPEN'
+            """,
+            (
+                _to_float(new_closed_pct),
+                _to_float(new_avg_locked_pnl),
+                _to_float(tp2_price),
+                now,
+                _to_float(tp2_price),
+                _to_float(liquidity),
+                _to_float(tp2_price),
+                now,
+                mint,
+            ),
+        )
+        conn.commit()
+
+    return "\n".join(
+        [
+            "✅ PAPER COPY TP2 V4.19",
+            "",
+            f"Token: {symbol}",
+            f"Mint: {_short(mint)}",
+            "Action: Paper second profit protection.",
+            "",
+            f"Closed now: {_fmt_decimal(close_now_pct, 2)}% from original position",
+            f"Total locked: {_fmt_decimal(new_closed_pct, 2)}%",
+            f"Remaining open: {_fmt_decimal(Decimal('100') - new_closed_pct, 2)}%",
+            "",
+            f"Entry price: {_fmt_price(entry_price)}",
+            f"TP2 price: {_fmt_price(tp2_price)}",
+            f"TP2 PnL: {_fmt_decimal(tp2_pnl_pct, 2)}%",
+            f"Avg locked PnL: {_fmt_decimal(new_avg_locked_pnl, 2)}%",
+            f"Liquidity: {_fmt_usd(liquidity)}",
+            "",
+            "Reason:",
+            f"Price reached +{_fmt_decimal(PAPER_TP2_PCT, 0)}% area after TP1.",
+            "V4.19 protects profit before late-cycle rug risk.",
+            "",
+            "DexScreener:",
+            dex_info.get("url") or f"https://dexscreener.com/solana/{mint}",
+            "",
+            "Mode: Paper only. No real sell was executed.",
+        ]
+    )
 
 def _is_tx_after_trade_open(tx: dict[str, Any], trade: dict[str, Any]) -> bool:
     block_time = tx.get("blockTime")
@@ -2675,6 +2782,25 @@ def _trade_age_hours(trade: dict[str, Any]) -> Decimal:
         return Decimal("0")
     return Decimal(str(seconds)) / Decimal("3600")
 
+
+def _trade_tp1_age_hours(trade: dict[str, Any]) -> Decimal:
+    tp1_at = trade.get("tp1_at") or ""
+    started = _parse_iso_datetime(tp1_at)
+
+    if not started:
+        started = _parse_iso_datetime(trade.get("opened_at"))
+
+    if not started:
+        return Decimal("0")
+
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+
+    seconds = (datetime.now(timezone.utc) - started).total_seconds()
+    if seconds <= 0:
+        return Decimal("0")
+
+    return Decimal(str(seconds)) / Decimal("3600")
 
 def maybe_close_paper_copy_from_digest_event(
     label: str,
@@ -3201,9 +3327,25 @@ def monitor_paper_copy_trades() -> list[str]:
     for trade in list_open_paper_trades():
         mint = trade["mint"]
 
-        # V4.18 DHT8 OUT Sync:
-        # If the normal wallet-watch notification missed the DHT8 OUT, scan recent DHT8 txs
-        # before any price/liquidity-based exits. This prevents holding until a late rug exit.
+        # V4.19 Cluster OUT Hard Exit Sync:
+        # OUT/SELL from any known/discovered cluster wallet on the same open mint
+        # is treated as a final exit signal. Cluster IN only arms watch.
+        recent_cluster_distribution = find_recent_cluster_distribution_for_trade(trade)
+        if recent_cluster_distribution:
+            exit_label, signature, analysis = recent_cluster_distribution
+            dex_info = fetch_dex_token_info(mint) or {}
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason=f"V4.19 Cluster OUT hard exit: {exit_label} / {analysis.get('type', '')}.",
+                    signature=signature,
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
+        # DHT8 OUT Sync:
+        # Still important, but no longer the only exit signal because it can arrive late.
         recent_exit = find_recent_dht8_out_for_trade(trade)
         if recent_exit:
             signature, _analysis = recent_exit
@@ -3211,24 +3353,7 @@ def monitor_paper_copy_trades() -> list[str]:
             messages.append(
                 close_paper_copy_trade(
                     trade=trade,
-                    reason="DHT8 OUT sync detected. Closing before waiting for liquidity/rug exit.",
-                    signature=signature,
-                    dex_info=dex_info,
-                )
-            )
-            continue
-
-        # V4.18 Cluster Distribution Sync:
-        # If Wallet Watch or digest already saw distribution on an open mint,
-        # close immediately instead of waiting for a late liquidity drop.
-        recent_cluster_distribution = find_recent_cluster_distribution_for_trade(trade)
-        if recent_cluster_distribution:
-            exit_label, signature, _analysis = recent_cluster_distribution
-            dex_info = fetch_dex_token_info(mint) or {}
-            messages.append(
-                close_paper_copy_trade(
-                    trade=trade,
-                    reason=f"First big cluster distribution sync detected after entry: {exit_label}.",
+                    reason="DHT8 OUT sync detected. Closing remaining position.",
                     signature=signature,
                     dex_info=dex_info,
                 )
@@ -3244,7 +3369,6 @@ def monitor_paper_copy_trades() -> list[str]:
         liquidity = dex_info.get("liquidity_usd") or Decimal("0")
         entry_price = _to_decimal(trade.get("entry_price_usd"))
         entry_liquidity = _to_decimal(trade.get("entry_liquidity_usd"))
-        last_liquidity = _to_decimal(trade.get("last_liquidity_usd"))
         peak_price = max(_to_decimal(trade.get("peak_price_usd")), price)
 
         update_paper_copy_market(trade, dex_info)
@@ -3254,18 +3378,55 @@ def monitor_paper_copy_trades() -> list[str]:
             pnl_pct = ((price - entry_price) / entry_price) * Decimal("100")
 
         tp1_done = bool(int(trade.get("tp1_done") or 0))
+        locked_pct = _to_decimal(trade.get("tp1_closed_pct"))
 
-        # V4.18 TP1: lock part of the profit while keeping the remaining paper position open.
+        # TP1: lock 50%.
         if not tp1_done and pnl_pct >= PAPER_TP1_PCT:
             messages.append(mark_paper_copy_tp1(trade, dex_info))
             refreshed_trade = get_open_paper_trade(mint)
             if refreshed_trade:
                 trade = refreshed_trade
             tp1_done = True
+            locked_pct = _to_decimal(trade.get("tp1_closed_pct"))
 
-        # V4.18 Time Protection:
-        # If a behavior/new-mint trade stays open too long without reaching TP1,
-        # close a positive trade instead of waiting for the cluster to kill liquidity.
+        # V4.19 TP2: after TP1, lock total 75% when profit reaches +60%.
+        if (
+            tp1_done
+            and locked_pct < PAPER_TP2_TOTAL_LOCKED_PERCENT
+            and pnl_pct >= PAPER_TP2_PCT
+        ):
+            tp2_message = mark_paper_copy_tp2(trade, dex_info)
+            if tp2_message:
+                messages.append(tp2_message)
+
+            refreshed_trade = get_open_paper_trade(mint)
+            if refreshed_trade:
+                trade = refreshed_trade
+            locked_pct = _to_decimal(trade.get("tp1_closed_pct"))
+
+        # V4.19 After-TP1 Time Protection:
+        # If TP1 happened and trade stayed open for too long while still profitable,
+        # close remaining instead of waiting for a late liquidity rug.
+        if (
+            PAPER_AFTER_TP1_TIME_PROTECTION_ENABLED
+            and tp1_done
+            and _trade_tp1_age_hours(trade) >= PAPER_AFTER_TP1_MAX_HOLD_HOURS
+            and pnl_pct >= PAPER_AFTER_TP1_MIN_EXIT_PNL
+        ):
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason=(
+                        f"V4.19 after-TP1 time protection: trade stayed open "
+                        f"{_fmt_decimal(PAPER_AFTER_TP1_MAX_HOLD_HOURS, 0)}h after TP1 "
+                        f"and remains profitable."
+                    ),
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
+        # Old no-TP1 time protection.
         if (
             PAPER_TIME_PROTECTION_ENABLED
             and not tp1_done
@@ -3281,15 +3442,7 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        # V4.18 Cluster-Only Kill Signal Exit:
-        # Do NOT close because of ordinary traders' m5 sells/buys, normal price pullback,
-        # or fast liquidity changes. These can be caused by retail noise and produced
-        # false early exits while the group was still running the token.
-        # Proactive exits are handled above by:
-        # - DHT8 OUT sync
-        # - GAMq exit activity
-        # - first big Cluster wallet distribution on the same open mint
-        # Hard emergency exits below remain as last-resort damage control only.
+        # Emergency exits below are last-resort damage control.
 
         if liquidity <= PAPER_LIQUIDITY_RUG_USD:
             messages.append(
@@ -3343,7 +3496,6 @@ def monitor_paper_copy_trades() -> list[str]:
             continue
 
     return messages
-
 
 def build_fast_kill_cycle_message(
     mint: str,
