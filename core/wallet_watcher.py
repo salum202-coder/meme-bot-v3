@@ -245,6 +245,20 @@ PENDING_TX_RECHECK_BATCH_LIMIT = 20
 DIGEST_ENTRY_SYNC_ENABLED = True
 DIGEST_ENTRY_SYNC_MAX_AGE_SECONDS = 10 * 60
 
+# V4.20 — Exit Intelligence Update
+# Paper-only. No live trades are executed.
+# Goal:
+# 1) Keep V4.19 group-exit behavior.
+# 2) Add Pattern Brain exit sync so stored OUT/SELL events can close open trades.
+# 3) Detect first Armed Wallet OUT: wallet received the same mint after entry,
+#    then later moved/sold it. This is the main signal we are testing.
+# 4) Fast Kill is recorded/observed, but it does NOT block the next entry.
+PAPER_V420_EXIT_INTELLIGENCE_ENABLED = True
+PAPER_V420_PATTERN_EXIT_SYNC_ENABLED = True
+PAPER_V420_ARMED_WALLET_OUT_EXIT_ENABLED = True
+PAPER_V420_FAST_KILL_OBSERVE_ONLY = True
+
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -3318,6 +3332,124 @@ def _has_m5_sell_pressure(dex_info: dict[str, Any]) -> bool:
 def _build_sell_pressure_text(dex_info: dict[str, Any]) -> str:
     return f"m5 sells/buys: {int(dex_info.get('sells_m5') or 0)}/{int(dex_info.get('buys_m5') or 0)}"
 
+def _trade_opened_iso_for_query(trade: dict[str, Any]) -> str:
+    opened = _parse_iso_datetime(trade.get("opened_at"))
+    if not opened:
+        return str(trade.get("opened_at") or "")
+    if opened.tzinfo is None:
+        opened = opened.replace(tzinfo=timezone.utc)
+    return opened.isoformat()
+
+
+def find_v420_first_armed_wallet_out_for_trade(trade: dict[str, Any]) -> dict[str, Any] | None:
+    """Return first Armed Wallet OUT/SELL after entry for this mint.
+
+    Armed Wallet OUT means:
+    - the same wallet had CLUSTER_IN/GAMQ_IN on this mint after paper entry
+    - then later had CLUSTER_OUT/CLUSTER_SELL/GAMQ_OUT/GAMQ_SELL on the same mint
+
+    This is intentionally based on Pattern Brain memory, not just live alerts,
+    so missed pending/digest events can still protect the open paper trade.
+    """
+    if not PAPER_V420_EXIT_INTELLIGENCE_ENABLED or not PAPER_V420_ARMED_WALLET_OUT_EXIT_ENABLED:
+        return None
+
+    mint = trade.get("mint") or ""
+    if not mint:
+        return None
+
+    try:
+        _ensure_pattern_brain_tables()
+    except Exception:
+        return None
+
+    opened_iso = _trade_opened_iso_for_query(trade)
+
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT exit_event.*
+                FROM cluster_pattern_events AS exit_event
+                WHERE exit_event.mint = ?
+                  AND exit_event.event_kind IN ('CLUSTER_OUT', 'CLUSTER_SELL', 'GAMQ_OUT', 'GAMQ_SELL')
+                  AND exit_event.event_at >= ?
+                  AND COALESCE(exit_event.wallet_address, '') <> ''
+                  AND EXISTS (
+                      SELECT 1
+                      FROM cluster_pattern_events AS arm_event
+                      WHERE arm_event.mint = exit_event.mint
+                        AND arm_event.wallet_address = exit_event.wallet_address
+                        AND arm_event.event_kind IN ('CLUSTER_IN', 'GAMQ_IN')
+                        AND arm_event.event_at >= ?
+                        AND arm_event.event_at <= exit_event.event_at
+                  )
+                ORDER BY exit_event.event_at ASC
+                LIMIT 1
+                """,
+                (mint, opened_iso, opened_iso),
+            ).fetchone()
+    except Exception:
+        return None
+
+    return dict(row) if row else None
+
+
+def find_v420_pattern_exit_for_trade(trade: dict[str, Any]) -> dict[str, Any] | None:
+    """Return first Pattern Brain OUT/SELL event after entry for this mint.
+
+    This is the V4.20 safety sync for cases where Pattern Brain already recorded
+    Cluster OUT/SELL on an open mint, but the live wallet scan did not close the
+    paper trade yet.
+    """
+    if not PAPER_V420_EXIT_INTELLIGENCE_ENABLED or not PAPER_V420_PATTERN_EXIT_SYNC_ENABLED:
+        return None
+
+    mint = trade.get("mint") or ""
+    if not mint:
+        return None
+
+    try:
+        _ensure_pattern_brain_tables()
+    except Exception:
+        return None
+
+    opened_iso = _trade_opened_iso_for_query(trade)
+
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM cluster_pattern_events
+                WHERE mint = ?
+                  AND event_kind IN ('DHT8_OUT', 'CLUSTER_OUT', 'CLUSTER_SELL', 'GAMQ_OUT', 'GAMQ_SELL')
+                  AND event_at >= ?
+                ORDER BY event_at ASC
+                LIMIT 1
+                """,
+                (mint, opened_iso),
+            ).fetchone()
+    except Exception:
+        return None
+
+    return dict(row) if row else None
+
+
+def _v420_exit_signature(row: dict[str, Any] | None) -> str:
+    if not row:
+        return ""
+    return str(row.get("signature") or "")
+
+
+def _v420_exit_label(row: dict[str, Any] | None) -> str:
+    if not row:
+        return "Unknown"
+    label = row.get("label") or "Unknown"
+    kind = row.get("event_kind") or "UNKNOWN"
+    return f"{label} / {kind}"
+
+
 def monitor_paper_copy_trades() -> list[str]:
     if not PAPER_COPY_ENABLED:
         return []
@@ -3326,6 +3458,38 @@ def monitor_paper_copy_trades() -> list[str]:
 
     for trade in list_open_paper_trades():
         mint = trade["mint"]
+
+        # V4.20 First Armed Wallet OUT Exit:
+        # Main hypothesis under test: a wallet that received the open mint after entry
+        # and later OUT/SELLs the same mint is often the earliest real distribution signal.
+        v420_armed_exit = find_v420_first_armed_wallet_out_for_trade(trade)
+        if v420_armed_exit:
+            dex_info = fetch_dex_token_info(mint) or {}
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason=f"V4.20 First Armed Wallet OUT exit: {_v420_exit_label(v420_armed_exit)}.",
+                    signature=_v420_exit_signature(v420_armed_exit),
+                    dex_info=dex_info,
+                )
+            )
+            continue
+
+        # V4.20 Pattern Brain Exit Sync:
+        # If the memory table already recorded OUT/SELL after entry, close even if
+        # the live scan missed it because of RPC delay or pending recheck timing.
+        v420_pattern_exit = find_v420_pattern_exit_for_trade(trade)
+        if v420_pattern_exit:
+            dex_info = fetch_dex_token_info(mint) or {}
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason=f"V4.20 Pattern Brain exit sync: {_v420_exit_label(v420_pattern_exit)}.",
+                    signature=_v420_exit_signature(v420_pattern_exit),
+                    dex_info=dex_info,
+                )
+            )
+            continue
 
         # V4.19 Cluster OUT Hard Exit Sync:
         # OUT/SELL from any known/discovered cluster wallet on the same open mint
