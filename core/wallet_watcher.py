@@ -254,8 +254,8 @@ DIGEST_ENTRY_SYNC_MAX_AGE_SECONDS = 10 * 60
 #    then later moved/sold it. This is the main signal we are testing.
 # 4) Fast Kill is recorded/observed, but it does NOT block the next entry.
 PAPER_V420_EXIT_INTELLIGENCE_ENABLED = True
-PAPER_V420_PATTERN_EXIT_SYNC_ENABLED = True
-PAPER_V420_ARMED_WALLET_OUT_EXIT_ENABLED = True
+PAPER_V420_PATTERN_EXIT_SYNC_ENABLED = False
+PAPER_V420_ARMED_WALLET_OUT_EXIT_ENABLED = False
 PAPER_V420_FAST_KILL_OBSERVE_ONLY = True
 
 
@@ -3491,22 +3491,12 @@ def monitor_paper_copy_trades() -> list[str]:
             )
             continue
 
-        # V4.19 Cluster OUT Hard Exit Sync:
-        # OUT/SELL from any known/discovered cluster wallet on the same open mint
-        # is treated as a final exit signal. Cluster IN only arms watch.
+        # V4.23 Noise/False-Exit Fix:
+        # Single Cluster OUT is observe-only now. Do not close just because one cluster wallet OUT/SELLs.
+        # Strong exits below remain active: DHT8 OUT, liquidity rug/drop, stop loss, post-TP1 protection.
         recent_cluster_distribution = find_recent_cluster_distribution_for_trade(trade)
         if recent_cluster_distribution:
-            exit_label, signature, analysis = recent_cluster_distribution
-            dex_info = fetch_dex_token_info(mint) or {}
-            messages.append(
-                close_paper_copy_trade(
-                    trade=trade,
-                    reason=f"V4.19 Cluster OUT hard exit: {exit_label} / {analysis.get('type', '')}.",
-                    signature=signature,
-                    dex_info=dex_info,
-                )
-            )
-            continue
+            pass
 
         # DHT8 OUT Sync:
         # Still important, but no longer the only exit signal because it can arrive late.
