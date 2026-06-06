@@ -14,23 +14,25 @@ wallet = wallet_path.read_text(encoding="utf-8")
 # 3) If 3 unique non-DHT8 wallets OUT after entry = Paper exit in all cases.
 # 4) TP1 / TP2 / normal emergency protection remain unchanged.
 
-# Add simple exit constants after existing V4.23 wallet-out constants.
+# Safety cleanup if an older malformed patch inserted escaped triple quotes.
+triple = '"' * 3
+wallet = wallet.replace("\\" + triple, triple)
+
 anchor = 'PAPER_WALLET_OUT_LIQUIDITY_DROP_CONFIRM_PCT = Decimal("30")'
-insert = """PAPER_WALLET_OUT_LIQUIDITY_DROP_CONFIRM_PCT = Decimal("30")
+insert = '''PAPER_WALLET_OUT_LIQUIDITY_DROP_CONFIRM_PCT = Decimal("30")
 
 # V4.24 — Simple Exit Rules
 # DHT8 OUT is an immediate exit.
 # Non-DHT8 cluster OUT exits only after this many unique wallets.
 PAPER_SIMPLE_EXIT_ENABLED = True
-PAPER_SIMPLE_CLUSTER_OUT_MIN_WALLETS = 3"""
+PAPER_SIMPLE_CLUSTER_OUT_MIN_WALLETS = 3'''
 if "PAPER_SIMPLE_EXIT_ENABLED" not in wallet:
     if anchor not in wallet:
         raise SystemExit("Could not find V4.23 constants anchor. Patch not applied.")
     wallet = wallet.replace(anchor, insert)
 
-# Add helper before maybe_handle_paper_copy_signal.
 helper_anchor = "def maybe_handle_paper_copy_signal("
-helper = r"""
+helper = '''
 def _is_v424_out_signal(analysis_type: str) -> bool:
     if "SELL" in analysis_type:
         return True
@@ -50,12 +52,10 @@ def maybe_close_paper_copy_on_simple_cluster_out_count(
     analysis: dict[str, Any],
     source: str = "wallet_watch_cluster_v424",
 ) -> list[str]:
-    \"\"\"V4.24 simple cluster exit.
-
-    DHT8 is handled separately as immediate exit.
-    Non-DHT8 OUT/SELL events are counted.
-    Exit only when 3 unique wallets OUT after entry.
-    \"\"\"
+    # V4.24 simple cluster exit.
+    # DHT8 is handled separately as immediate exit.
+    # Non-DHT8 OUT/SELL events are counted.
+    # Exit only when 3 unique wallets OUT after entry.
     if not PAPER_COPY_ENABLED or not PAPER_SIMPLE_EXIT_ENABLED:
         return []
 
@@ -98,15 +98,14 @@ def maybe_close_paper_copy_on_simple_cluster_out_count(
         )
     ]
 
-"""
+'''
 if "def maybe_close_paper_copy_on_simple_cluster_out_count(" not in wallet:
     pos = wallet.find(helper_anchor)
     if pos == -1:
         raise SystemExit("Could not find maybe_handle_paper_copy_signal anchor. Patch not applied.")
     wallet = wallet[:pos] + helper + "\n" + wallet[pos:]
 
-# Replace V4.23 DHT8 block with immediate DHT8 exit.
-old_dht8 = """    # V4.23 Exit rule 1:
+old_dht8 = '''    # V4.23 Exit rule 1:
     # DHT8 OUT is important, but one OUT alone is observe-only.
     # Close only after 2 wallet OUT events, or OUT + price/liquidity confirmation.
     if open_trade and label == "DHT8 Main" and "Distribution OUT" in analysis_type:
@@ -121,8 +120,8 @@ old_dht8 = """    # V4.23 Exit rule 1:
         if exit_messages:
             messages.extend(exit_messages)
             return messages
-"""
-new_dht8 = """    # V4.24 Simple Exit rule 1:
+'''
+new_dht8 = '''    # V4.24 Simple Exit rule 1:
     # DHT8 OUT / SELL / Transfer OUT = immediate Paper exit in all cases.
     if open_trade and label == "DHT8 Main" and _is_v424_out_signal(analysis_type):
         messages.append(
@@ -133,13 +132,13 @@ new_dht8 = """    # V4.24 Simple Exit rule 1:
             )
         )
         return messages
-"""
-if old_dht8 not in wallet:
+'''
+if old_dht8 not in wallet and new_dht8 not in wallet:
     raise SystemExit("Could not find V4.23 DHT8 exit block. Patch not applied.")
-wallet = wallet.replace(old_dht8, new_dht8)
+if old_dht8 in wallet:
+    wallet = wallet.replace(old_dht8, new_dht8)
 
-# Replace V4.23 GAMq + Cluster blocks with one simple cluster count block.
-old_cluster = """    # V4.23 Exit rule 2:
+old_cluster = '''    # V4.23 Exit rule 2:
     # GAMq OUT/SELL is also confirmed through the same pressure gate.
     if open_trade and "GAMq" in label and ("SELL" in analysis_type or "Distribution OUT" in analysis_type):
         exit_messages = maybe_close_paper_copy_on_wallet_out_pressure(
@@ -168,8 +167,8 @@ old_cluster = """    # V4.23 Exit rule 2:
         if exit_messages:
             messages.extend(exit_messages)
             return messages
-"""
-new_cluster = """    # V4.24 Simple Exit rule 2:
+'''
+new_cluster = '''    # V4.24 Simple Exit rule 2:
     # Any non-DHT8 cluster/GAMq/BJsbr OUT is counted.
     # Exit only after 3 unique non-DHT8 wallets OUT after entry.
     if open_trade and label != "DHT8 Main" and _is_v424_out_signal(analysis_type):
@@ -184,10 +183,11 @@ new_cluster = """    # V4.24 Simple Exit rule 2:
         if exit_messages:
             messages.extend(exit_messages)
             return messages
-"""
-if old_cluster not in wallet:
+'''
+if old_cluster not in wallet and new_cluster not in wallet:
     raise SystemExit("Could not find V4.23 GAMq/Cluster exit blocks. Patch not applied.")
-wallet = wallet.replace(old_cluster, new_cluster)
+if old_cluster in wallet:
+    wallet = wallet.replace(old_cluster, new_cluster)
 
 wallet_path.write_text(wallet, encoding="utf-8")
 
