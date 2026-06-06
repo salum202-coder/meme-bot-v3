@@ -67,7 +67,7 @@ def build_bot_application():
     # Wallet Watch - important alerts.
     app.job_queue.run_repeating(run_wallet_watch_cycle, interval=20, first=10)
 
-    # Wallet Cluster Digest - summary report every 30 minutes.
-    app.job_queue.run_repeating(run_wallet_digest_cycle, interval=1800, first=180)
+    # V4.23: Wallet Cluster Digest auto-job disabled to remove 30m Telegram spam.
+    # Manual /digest command remains available if you need it.
 
     return app
