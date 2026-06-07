@@ -180,14 +180,14 @@ BEHAVIOR_MIN_PRICE_CHANGE_H1_PCT = Decimal("10")
 # This is Paper-only partial profit accounting. No real orders are sent.
 # Paper profit management V4.19
 # This is Paper-only partial profit accounting. No real orders are sent.
-PAPER_TP1_PCT = Decimal("50")
+PAPER_TP1_PCT = Decimal("20")  # V4.25: first auto lock at +20%
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
 PAPER_AFTER_TP1_PROFIT_LOCK_PCT = Decimal("0.10")
 PAPER_TRAILING_AFTER_TP1_DROP_PCT = Decimal("0.12")
 
 # V4.19 — Profit Protection
 # After TP1, lock more profit instead of leaving 50% exposed until rug.
-PAPER_TP2_PCT = Decimal("60")
+PAPER_TP2_PCT = Decimal("32")  # V4.25: second auto lock at +32%
 PAPER_TP2_TOTAL_LOCKED_PERCENT = Decimal("75")
 
 # If TP1 happened and the trade stays open too long while still profitable,
