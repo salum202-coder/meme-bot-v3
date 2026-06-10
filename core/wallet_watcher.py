@@ -5789,7 +5789,7 @@ def _danger_score_for_wallet(row: dict[str, Any]) -> int:
         """V4.26 Mint Review - passive/read-only."""
         _ensure_pattern_brain_tables()
 
-    mint_query = (mint_query or "").strip()
+        mint_query = (mint_query or "").strip()
 
     with get_conn() as conn:
         if mint_query:
