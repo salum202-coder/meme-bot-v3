@@ -241,7 +241,7 @@ async def exit_ranking_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text(
             f"❌ Exit Ranking error:\n{type(e).__name__}: {e}"
         )
-     async def mint_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def mint_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _set_chat_id(update, context)
 
     try:
