@@ -5786,8 +5786,8 @@ def _danger_score_for_wallet(row: dict[str, Any]) -> int:
         score = min(score, 45)
     return max(0, min(99, score))
     def build_mint_review_message(mint_query: str = "") -> str:
-    """V4.26 Mint Review - passive/read-only."""
-    _ensure_pattern_brain_tables()
+        """V4.26 Mint Review - passive/read-only."""
+        _ensure_pattern_brain_tables()
 
     mint_query = (mint_query or "").strip()
 
