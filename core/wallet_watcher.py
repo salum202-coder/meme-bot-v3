@@ -5785,7 +5785,87 @@ def _danger_score_for_wallet(row: dict[str, Any]) -> int:
     if out_count == 0 and sell_count == 0 and in_count > 0:
         score = min(score, 45)
     return max(0, min(99, score))
+def build_exit_ranking_message() -> str:
+    """V4.26 Exit Wallet Ranking - passive/read-only."""
+    _ensure_pattern_brain_tables()
 
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                COALESCE(e.label, 'Unknown') AS label,
+                COALESCE(e.wallet_address, '') AS wallet_address,
+                COUNT(*) AS out_events,
+                COUNT(DISTINCT e.mint) AS mints_seen,
+                SUM(CASE WHEN CAST(m.final_pnl_pct AS REAL) < 0 THEN 1 ELSE 0 END) AS losing_mints,
+                SUM(CASE WHEN CAST(m.final_pnl_pct AS REAL) <= -10 THEN 1 ELSE 0 END) AS bad_mints,
+                AVG(CAST(m.final_pnl_pct AS REAL)) AS avg_final_pnl,
+                MIN(CAST(m.final_pnl_pct AS REAL)) AS worst_final_pnl,
+                MAX(CAST(m.final_pnl_pct AS REAL)) AS best_final_pnl
+            FROM cluster_pattern_events e
+            JOIN cluster_mint_memory m ON m.mint = e.mint
+            WHERE e.event_kind IN ('DHT8_OUT','CLUSTER_OUT','CLUSTER_SELL','GAMQ_OUT','GAMQ_SELL')
+              AND COALESCE(m.final_pnl_pct, '') <> ''
+            GROUP BY e.wallet_address, e.label
+            ORDER BY
+                bad_mints DESC,
+                losing_mints DESC,
+                avg_final_pnl ASC,
+                out_events DESC
+            LIMIT 20
+            """
+        ).fetchall()
+
+    lines = [
+        "🏆 Exit Wallet Ranking V4.26",
+        "",
+        "Mode: Passive analysis only. No entry/exit decisions changed.",
+        "Ranks wallets by closed mint results after OUT/SELL.",
+        "",
+    ]
+
+    if not rows:
+        lines.append("No enough closed OUT/SELL data yet.")
+        return "\n".join(lines)
+
+    for i, row in enumerate(rows, start=1):
+        d = dict(row)
+
+        out_events = int(d.get("out_events") or 0)
+        losing_mints = int(d.get("losing_mints") or 0)
+        bad_mints = int(d.get("bad_mints") or 0)
+
+        avg_pnl = _to_decimal(d.get("avg_final_pnl"))
+        worst_pnl = _to_decimal(d.get("worst_final_pnl"))
+        best_pnl = _to_decimal(d.get("best_final_pnl"))
+
+        danger_score = 0
+        danger_score += min(35, bad_mints * 12)
+        danger_score += min(25, losing_mints * 7)
+        danger_score += min(20, out_events * 2)
+
+        if avg_pnl < Decimal("0"):
+            danger_score += min(20, abs(int(avg_pnl)))
+
+        danger_score = max(0, min(99, danger_score))
+
+        lines.extend([
+            f"{i}) {d.get('label') or 'Unknown'} | Danger: {danger_score}/100",
+            f"   Wallet: {_short(d.get('wallet_address'))}",
+            f"   OUT/SELL events: {out_events} | Mints: {int(d.get('mints_seen') or 0)}",
+            f"   Losing mints: {losing_mints} | Bad <= -10%: {bad_mints}",
+            f"   Avg final PnL: {_fmt_decimal(avg_pnl, 2)}%",
+            f"   Worst/Best: {_fmt_decimal(worst_pnl, 2)}% / {_fmt_decimal(best_pnl, 2)}%",
+            "",
+        ])
+
+    lines.extend([
+        "How to use:",
+        "- High danger means this wallet's OUT/SELL often appears on bad closed mints.",
+        "- For now this is analysis only, not an auto-exit rule.",
+    ])
+
+    return "\n".join(lines)
 
 def build_pattern_brain_message() -> str:
     _ensure_pattern_brain_tables()
