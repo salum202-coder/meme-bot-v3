@@ -240,6 +240,3 @@ async def exit_ranking_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text(
             f"❌ Exit Ranking error:\n{type(e).__name__}: {e}"
         )
-
-            f"❌ Mint Review error:\n{type(e).__name__}: {e}"
-        )
