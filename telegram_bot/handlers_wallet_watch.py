@@ -14,6 +14,7 @@ from core.wallet_watcher import (
     manual_close_paper_copy_trade,
     build_cluster_discovery_message,
     build_pattern_brain_message,
+    build_exit_ranking_message,
 )
 from storage.repository_wallet_watch import get_wallet_watch_states
 
@@ -228,4 +229,14 @@ async def pattern_brain_handler(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         await update.effective_message.reply_text(
             f"❌ Pattern Brain error:\n{type(e).__name__}: {e}"
+        )
+async def exit_ranking_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _set_chat_id(update, context)
+
+    try:
+        message = build_exit_ranking_message()
+        await _reply_long_text(update, message)
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"❌ Exit Ranking error:\n{type(e).__name__}: {e}"
         )
