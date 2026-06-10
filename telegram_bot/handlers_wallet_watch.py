@@ -15,7 +15,6 @@ from core.wallet_watcher import (
     build_cluster_discovery_message,
     build_pattern_brain_message,
     build_exit_ranking_message,
-    build_mint_review_message,
 )
 from storage.repository_wallet_watch import get_wallet_watch_states
 
@@ -241,14 +240,6 @@ async def exit_ranking_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text(
             f"❌ Exit Ranking error:\n{type(e).__name__}: {e}"
         )
-async def mint_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _set_chat_id(update, context)
 
-    try:
-        mint_query = " ".join(context.args) if context.args else ""
-        message = build_mint_review_message(mint_query)
-        await _reply_long_text(update, message)
-    except Exception as e:
-        await update.effective_message.reply_text(
             f"❌ Mint Review error:\n{type(e).__name__}: {e}"
         )
