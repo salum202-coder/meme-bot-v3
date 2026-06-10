@@ -5785,6 +5785,93 @@ def _danger_score_for_wallet(row: dict[str, Any]) -> int:
     if out_count == 0 and sell_count == 0 and in_count > 0:
         score = min(score, 45)
     return max(0, min(99, score))
+    def build_mint_review_message(mint_query: str = "") -> str:
+    """V4.26 Mint Review - passive/read-only."""
+    _ensure_pattern_brain_tables()
+
+    mint_query = (mint_query or "").strip()
+
+    with get_conn() as conn:
+        if mint_query:
+            mint_row = conn.execute(
+                """
+                SELECT *
+                FROM cluster_mint_memory
+                WHERE mint LIKE ?
+                ORDER BY last_event_at DESC
+                LIMIT 1
+                """,
+                (f"{mint_query}%",),
+            ).fetchone()
+        else:
+            mint_row = conn.execute(
+                """
+                SELECT *
+                FROM cluster_mint_memory
+                ORDER BY last_event_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+
+        if not mint_row:
+            return "🔎 Mint Review V4.26\n\nNo mint found."
+
+        mint = dict(mint_row).get("mint")
+
+        events = conn.execute(
+            """
+            SELECT event_kind, label, wallet_address, event_at, price, liquidity
+            FROM cluster_pattern_events
+            WHERE mint = ?
+            ORDER BY event_at ASC
+            LIMIT 120
+            """,
+            (mint,),
+        ).fetchall()
+
+    d = dict(mint_row)
+
+    lines = [
+        "🔎 Mint Review V4.26",
+        "",
+        f"Mint: {_short(mint)}",
+        f"DHT8 IN: {d.get('dht8_in_seen')}",
+        f"DHT8 OUT: {d.get('dht8_out_seen')}",
+        f"GAMq Count: {d.get('gamq_count')}",
+        f"Cluster IN: {d.get('cluster_in_count')}",
+        f"Cluster OUT/SELL: {d.get('cluster_out_count')}",
+        f"Paper Entry: {d.get('paper_entry_seen')}",
+        f"Paper Exit: {d.get('paper_exit_seen')}",
+        f"Final PnL: {d.get('final_pnl_pct') or 'open/unknown'}%",
+        f"Last: {d.get('last_event_kind')} / {d.get('last_label')}",
+        "",
+        "Timeline:",
+    ]
+
+    if not events:
+        lines.append("No events found.")
+        return "\n".join(lines)
+
+    for row in events[-40:]:
+        e = dict(row)
+        price = _to_decimal(e.get("price"))
+        liq = _to_decimal(e.get("liquidity"))
+
+        lines.append(
+            f"- {e.get('event_kind')} | {e.get('label') or 'Unknown'} | "
+            f"{_short(e.get('wallet_address'))} | "
+            f"Price: {_fmt_decimal(price, 8)} | Liq: ${_fmt_decimal(liq, 2)}"
+        )
+
+    lines.extend([
+        "",
+        "How to use:",
+        "- Look for which wallets entered first.",
+        "- Look for which wallets started OUT before dump.",
+        "- Compare this mint with /exit_ranking.",
+    ])
+
+    return "\n".join(lines)
 def build_exit_ranking_message() -> str:
     """V4.26 Exit Wallet Ranking - passive/read-only."""
     _ensure_pattern_brain_tables()
