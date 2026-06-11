@@ -193,7 +193,7 @@ PAPER_TP2_TOTAL_LOCKED_PERCENT = Decimal("75")
 # If TP1 happened and the trade stays open too long while still profitable,
 # close the remaining position before late-cycle rug risk.
 PAPER_AFTER_TP1_TIME_PROTECTION_ENABLED = True
-PAPER_AFTER_TP1_MAX_HOLD_HOURS = Decimal("8")
+PAPER_AFTER_TP1_MAX_HOLD_HOURS = Decimal("4")
 PAPER_AFTER_TP1_MIN_EXIT_PNL = Decimal("10")
 
 DHT8_EXIT_SYNC_SIGNATURE_LIMIT = 60
