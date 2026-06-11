@@ -48,6 +48,7 @@ WATCH_WALLETS: dict[str, str] = {
     "Cluster 2usC": "2usC51yJqENTS6U4bo19AmDspRF9UizrmkMQrB3Pxno3",
     "Cluster GAMq": "973vghafz4fQYB3MquWdLZd8dBMzJWcsTyBxH2GAMqcY",
     "Cluster G8R7 Buyer Distributor": "G8R73oApukNBHynSnmXWamhJuc1WWr7tBUAnra9wMdTt",
+    "Candidate Cluster FLgc Distributor": "FLgcU5fu4n7s8P2c5uoe8jE4sgnVbH5MBszGqgrrETVU",
     "Cluster JBS2 Initial Buyer": "JBS2K42NigjzTd9sSc2qp8ySMyZL5t82UAGudgjhMXpY",
     "Cluster A4tT Initial Buyer": "A4tTYEDfscYjAEpTymoNAzTZ9FnXouxKhe3iuBTDuQXz",
     "Cluster 6g4v Initial Buyer": "BpkvZYRdDohvyL9gdC9hCadLnVeWFLoEjEmxz166g4vu2",
