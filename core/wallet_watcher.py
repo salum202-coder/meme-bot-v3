@@ -5178,7 +5178,42 @@ def _is_group_arm_signal_for_mint(label: str, analysis: dict[str, Any], mint: st
         return False
     return _large_token_amount_for_mint(analysis, mint) >= CLUSTER_DISCOVERY_MIN_AMOUNT
 
+def _has_first_cluster_in_alert_been_sent(mint: str) -> bool:
+    try:
+        _ensure_pattern_brain_tables()
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT first_cluster_in_at FROM cluster_mint_memory WHERE mint = ?",
+                (mint,),
+            ).fetchone()
+            return bool(row and row["first_cluster_in_at"])
+    except Exception:
+        return True
 
+
+def build_first_cluster_in_alert(label: str, wallet_address: str, mint: str, signature: str, analysis: dict[str, Any]) -> str:
+    amount = _large_token_amount_for_mint(analysis, mint)
+    return "\n".join(
+        [
+            "🟡 FIRST CLUSTER IN ALERT",
+            "",
+            f"Mint: {_short(mint)}",
+            f"Full Mint: {mint}",
+            f"Wallet label: {label}",
+            f"Wallet: {_short(wallet_address)}",
+            f"Detected: First group IN on this mint",
+            f"Amount: {_fmt_decimal(amount, 4)}",
+            "",
+            "Meaning:",
+            "This is the first detected group entry on this token.",
+            "Alert only. No paper entry and no real trade was executed.",
+            "",
+            "DexScreener:",
+            f"https://dexscreener.com/solana/{mint}",
+            "",
+            f"Tx: https://solscan.io/tx/{signature}",
+        ]
+    )
 def build_cluster_armed_message(label: str, wallet_address: str, mint: str, signature: str, analysis: dict[str, Any]) -> str:
     amount = _large_token_amount_for_mint(analysis, mint)
     return "\n".join(
@@ -5221,7 +5256,10 @@ def maybe_handle_paper_copy_signal(
 
     analysis_type = analysis.get("type", "")
     token_family = analysis.get("token_family") or token_family_for_mint(mint)
-
+    first_cluster_in_alert_needed = (
+        _is_group_arm_signal_for_mint(label, analysis, mint)
+        and not _has_first_cluster_in_alert_been_sent(mint)
+    )
     # Record and discover cluster behavior every time we see a large group event.
     if "Distribution" in analysis_type or "SELL" in analysis_type or "BUY" in analysis_type:
         if _large_token_amount_for_mint(analysis, mint) >= CLUSTER_DISCOVERY_MIN_AMOUNT or _is_cluster_like_label(label) or label == "DHT8 Main":
@@ -5234,7 +5272,16 @@ def maybe_handle_paper_copy_signal(
                 source="wallet_watch_v4_17",
             )
             discover_related_wallets_from_tx(signature, mint, label, analysis_type)
-
+            if first_cluster_in_alert_needed:
+                messages.append(
+                    build_first_cluster_in_alert(
+                        label=label,
+                        wallet_address=wallet_address,
+                        mint=mint,
+                        signature=signature,
+                        analysis=analysis,
+                    )
+                )
     # DHT8 Distribution IN is still the earliest watch signal.
     messages.extend(
         maybe_handle_new_mint_watch_signal(
