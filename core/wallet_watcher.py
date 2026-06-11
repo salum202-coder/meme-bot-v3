@@ -6024,6 +6024,7 @@ def build_pattern_brain_message() -> str:
             lines.extend(
                 [
                     f"• {_short(r.get('mint'))}",
+                    f"  Full Mint: {r.get('mint')}",
                     f"  DHT8 IN: {'yes' if r.get('dht8_in_at') else 'no'} | DHT8 OUT: {'yes' if r.get('dht8_out_at') else 'no'} | GAMq: {r.get('gamq_event_count') or 0}",
                     f"  Cluster IN: {r.get('cluster_in_count') or 0} | Cluster OUT/SELL: {r.get('cluster_out_count') or 0}",
                     f"  Paper Entry: {r.get('paper_entry_count') or 0} | Paper Exit: {r.get('paper_exit_count') or 0}{pnl_text}",
