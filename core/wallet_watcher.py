@@ -191,7 +191,7 @@ BEHAVIOR_MIN_PRICE_CHANGE_H1_PCT = Decimal("10")
 PAPER_TP1_PCT = Decimal("20")  # V4.25: first auto lock at +20%
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
 PAPER_AFTER_TP1_PROFIT_LOCK_PCT = Decimal("0.10")
-PAPER_TRAILING_AFTER_TP1_DROP_PCT = Decimal("0.12")
+PAPER_TRAILING_AFTER_TP1_DROP_PCT = Decimal("0.08")
 
 # V4.19 — Profit Protection
 # After TP1, lock more profit instead of leaving 50% exposed until rug.
