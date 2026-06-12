@@ -165,6 +165,13 @@ NEW_MINT_METRICS_VOLUME_DOMINANCE_ENABLED = True
 NEW_MINT_METRICS_MIN_BUY_VOLUME_RATIO = Decimal("2.0")
 NEW_MINT_METRICS_MIN_PRICE_CHANGE_H1_PCT = Decimal("10")
 
+# Pending New Mint Recheck V4.27
+# If DHT8 sees a mint before DexScreener data is ready, keep it WATCHING and recheck it.
+NEW_MINT_RECHECK_ENABLED = True
+NEW_MINT_RECHECK_MAX_AGE_SECONDS = 10 * 60
+NEW_MINT_RECHECK_MIN_LIQUIDITY_USD = Decimal("30000")
+NEW_MINT_RECHECK_MIN_VOLUME_H1_USD = Decimal("5000")
+
 # Behavior-Based Detection V4.18
 # Do not depend only on names like SPCX / SLX.
 # If DHT8 receives a large allocation and Dex metrics are strong, treat it as a behavior rotation candidate.
@@ -3301,7 +3308,22 @@ def monitor_new_mint_metric_entries() -> list[str]:
         mint = watched.get("mint")
         if not mint:
             continue
+        # Pending New Mint Recheck V4.27
+        # Keep very-early DHT8 mints alive for a short window while DexScreener data appears.
+        first_seen = _parse_iso_datetime(watched.get("first_seen_at") or "")
+        if first_seen:
+            if first_seen.tzinfo is None:
+                first_seen = first_seen.replace(tzinfo=timezone.utc)
 
+            age_seconds = (datetime.now(timezone.utc) - first_seen).total_seconds()
+
+            if NEW_MINT_RECHECK_ENABLED and age_seconds > NEW_MINT_RECHECK_MAX_AGE_SECONDS:
+                update_new_mint_watch_status(
+                    mint=mint,
+                    status="EXPIRED",
+                    last_alert="PENDING_RECHECK_EXPIRED",
+                )
+                continue
         if get_open_paper_trade(mint):
             update_new_mint_watch_status(
                 mint=mint,
@@ -3318,6 +3340,18 @@ def monitor_new_mint_metric_entries() -> list[str]:
 
         dex_info = fetch_dex_token_info(mint)
         if not dex_info:
+            update_new_mint_watch_checked(mint)
+            continue
+
+                price = dex_info.get("price_usd") or Decimal("0")
+        liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+        volume_h1 = dex_info.get("volume_h1") or Decimal("0")
+
+        if NEW_MINT_RECHECK_ENABLED and (
+            price <= 0
+            or liquidity < NEW_MINT_RECHECK_MIN_LIQUIDITY_USD
+            or volume_h1 < NEW_MINT_RECHECK_MIN_VOLUME_H1_USD
+        ):
             update_new_mint_watch_checked(mint)
             continue
 
