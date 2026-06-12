@@ -3343,7 +3343,7 @@ def monitor_new_mint_metric_entries() -> list[str]:
             update_new_mint_watch_checked(mint)
             continue
 
-                price = dex_info.get("price_usd") or Decimal("0")
+        price = dex_info.get("price_usd") or Decimal("0")
         liquidity = dex_info.get("liquidity_usd") or Decimal("0")
         volume_h1 = dex_info.get("volume_h1") or Decimal("0")
 
