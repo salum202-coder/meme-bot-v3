@@ -5333,7 +5333,18 @@ def maybe_handle_paper_copy_signal(
                         analysis=analysis,
                     )
                 )
-                                dex_info = fetch_dex_token_info(mint)
+            if first_cluster_in_alert_needed:
+                messages.append(
+                    build_first_cluster_in_alert(
+                        label=label,
+                        wallet_address=wallet_address,
+                        mint=mint,
+                        signature=signature,
+                        analysis=analysis,
+                    )
+                )
+
+                dex_info = fetch_dex_token_info(mint)
                 if dex_info:
                     messages.append(
                         open_paper_copy_trade(
