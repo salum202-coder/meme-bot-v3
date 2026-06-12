@@ -192,6 +192,7 @@ PAPER_TP1_PCT = Decimal("20")  # V4.25: first auto lock at +20%
 PAPER_TP1_CLOSE_PERCENT = Decimal("50")
 PAPER_AFTER_TP1_PROFIT_LOCK_PCT = Decimal("0.10")
 PAPER_TRAILING_AFTER_TP1_DROP_PCT = Decimal("0.08")
+PAPER_AFTER_TP1_FAST_LIQUIDITY_DROP_PCT = Decimal("0.20")
 
 # V4.19 — Profit Protection
 # After TP1, lock more profit instead of leaving 50% exposed until rug.
@@ -3793,6 +3794,7 @@ def monitor_paper_copy_trades() -> list[str]:
         liquidity = dex_info.get("liquidity_usd") or Decimal("0")
         entry_price = _to_decimal(trade.get("entry_price_usd"))
         entry_liquidity = _to_decimal(trade.get("entry_liquidity_usd"))
+        last_liquidity = _to_decimal(trade.get("last_liquidity_usd"))
         peak_price = max(_to_decimal(trade.get("peak_price_usd")), price)
 
         update_paper_copy_market(trade, dex_info)
@@ -3803,6 +3805,7 @@ def monitor_paper_copy_trades() -> list[str]:
 
         tp1_done = bool(int(trade.get("tp1_done") or 0))
         locked_pct = _to_decimal(trade.get("tp1_closed_pct"))
+              
 
         # TP1: lock 50%.
         if not tp1_done and pnl_pct >= PAPER_TP1_PCT:
@@ -3812,6 +3815,20 @@ def monitor_paper_copy_trades() -> list[str]:
                 trade = refreshed_trade
             tp1_done = True
             locked_pct = _to_decimal(trade.get("tp1_closed_pct"))
+                    # V4.28 Post-TP1 liquidity protection
+        if (
+            tp1_done
+            and last_liquidity > 0
+            and liquidity <= last_liquidity * (Decimal("1") - PAPER_AFTER_TP1_FAST_LIQUIDITY_DROP_PCT)
+        ):
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason="V4.28 post-TP1 emergency: liquidity dropped fast after TP1.",
+                    dex_info=dex_info,
+                )
+            )
+            continue
 
         # V4.19 TP2: after TP1, lock total 75% when profit reaches +60%.
         if (
