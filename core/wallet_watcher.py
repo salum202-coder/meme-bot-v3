@@ -5333,6 +5333,23 @@ def maybe_handle_paper_copy_signal(
                         analysis=analysis,
                     )
                 )
+                                dex_info = fetch_dex_token_info(mint)
+                if dex_info:
+                    messages.append(
+                        open_paper_copy_trade(
+                            mint=mint,
+                            label=label,
+                            wallet_address=wallet_address,
+                            signature=signature,
+                            analysis={
+                                **analysis,
+                                "token_family": token_family,
+                                "paper_reason": "First group IN entry from any cluster wallet.",
+                            },
+                            dex_info=dex_info,
+                        )
+                    )
+                    return messages
     # DHT8 Distribution IN is still the earliest watch signal.
     messages.extend(
         maybe_handle_new_mint_watch_signal(
