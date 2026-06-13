@@ -2159,7 +2159,13 @@ def _paper_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
 
     if ratio < PAPER_MIN_BUY_SELL_RATIO:
         return False, f"Buy/Sell ratio below {_fmt_decimal(PAPER_MIN_BUY_SELL_RATIO, 2)}x."
-
+        print(
+        f"[ENTRY_CHECK] "
+        f"price={price} "
+        f"liq={liquidity} "
+        f"vol={volume_h1} "
+        f"ratio={ratio}"
+    )
     return True, "Entry quality passed."
 
 
