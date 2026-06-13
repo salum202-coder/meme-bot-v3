@@ -3844,28 +3844,31 @@ def monitor_paper_copy_trades() -> list[str]:
                 trade = refreshed_trade
             locked_pct = _to_decimal(trade.get("tp1_closed_pct"))
 
-        # V4.19 After-TP1 Time Protection:
-        # If TP1 happened and trade stayed open for too long while still profitable,
-        # close remaining instead of waiting for a late liquidity rug.
+        # V4.29 Pair-age final exit:
+        # Close remaining after the token/pair reaches 3h age, not 3h after TP1.
+        pair_age_seconds = dex_info.get("pair_age_seconds")
+        pair_age_hours = Decimal("0")
+        if pair_age_seconds is not None:
+            pair_age_hours = Decimal(str(pair_age_seconds)) / Decimal("3600")
+
         if (
             PAPER_AFTER_TP1_TIME_PROTECTION_ENABLED
             and tp1_done
-            and _trade_tp1_age_hours(trade) >= PAPER_AFTER_TP1_MAX_HOLD_HOURS
-            and pnl_pct >= PAPER_AFTER_TP1_MIN_EXIT_PNL
+            and pair_age_hours >= PAPER_AFTER_TP1_MAX_HOLD_HOURS
+            and pnl_pct > 0
         ):
             messages.append(
                 close_paper_copy_trade(
                     trade=trade,
                     reason=(
-                        f"V4.19 after-TP1 time protection: trade stayed open "
-                        f"{_fmt_decimal(PAPER_AFTER_TP1_MAX_HOLD_HOURS, 0)}h after TP1 "
-                        f"and remains profitable."
+                        f"V4.29 pair-age final exit: pair age reached "
+                        f"{_fmt_decimal(PAPER_AFTER_TP1_MAX_HOLD_HOURS, 0)}h "
+                        f"and remaining position is profitable."
                     ),
                     dex_info=dex_info,
                 )
             )
             continue
-
         # Old no-TP1 time protection.
         if (
             PAPER_TIME_PROTECTION_ENABLED
@@ -5391,16 +5394,19 @@ def maybe_handle_paper_copy_signal(
         if get_new_mint_watch(mint):
             update_new_mint_watch_status(mint=mint, status="GAMQ_EXIT", last_alert="GAMQ_EXIT_ACTIVITY")
 
-    # Final exit: only group-controlled exit behavior on the same mint.
+     # V4.29: group exit signal is pressure only, not immediate final exit.
     if open_trade and _is_group_exit_signal_for_mint(label, analysis, mint):
-        messages.append(
-            close_paper_copy_trade(
-                trade=open_trade,
-                reason=f"First group exit signal on open mint: {label} / {analysis_type}.",
-                signature=signature,
-            )
+        exit_messages = maybe_close_paper_copy_on_wallet_out_pressure(
+            trade=open_trade,
+            label=label,
+            wallet_address=wallet_address,
+            signature=signature,
+            analysis=analysis,
+            source="group_exit_signal",
         )
-        return messages
+        if exit_messages:
+            messages.extend(exit_messages)
+            return messages
 
     # Cluster IN after entry arms a recipient; it does not close by itself.
     if open_trade and _is_group_arm_signal_for_mint(label, analysis, mint):
