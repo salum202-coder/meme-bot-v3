@@ -2150,6 +2150,13 @@ def _paper_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
 
     if price <= 0:
         return False, "Price is not available."
+
+    if liquidity < PAPER_MIN_LIQUIDITY_USD:
+        return False, f"Liquidity below {_fmt_usd(PAPER_MIN_LIQUIDITY_USD)}."
+
+    if volume_h1 < PAPER_MIN_VOLUME_H1_USD:
+        return False, f"Volume 1H below {_fmt_usd(PAPER_MIN_VOLUME_H1_USD)}."
+
     print(
         f"[ENTRY_CHECK] "
         f"price={price} "
@@ -2158,23 +2165,10 @@ def _paper_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
         f"ratio={ratio}"
     )
 
-    if liquidity < PAPER_MIN_LIQUIDITY_USD:
-        return False, f"Liquidity below {_fmt_usd(PAPER_MIN_LIQUIDITY_USD)}."
-
-    if volume_h1 < PAPER_MIN_VOLUME_H1_USD:
-        return False, f"Volume 1H below {_fmt_usd(PAPER_MIN_VOLUME_H1_USD)}."
-
     if ratio < PAPER_MIN_BUY_SELL_RATIO:
         return False, f"Buy/Sell ratio below {_fmt_decimal(PAPER_MIN_BUY_SELL_RATIO, 2)}x."
-        print(
-        f"[ENTRY_CHECK] "
-        f"price={price} "
-        f"liq={liquidity} "
-        f"vol={volume_h1} "
-        f"ratio={ratio}"
-    )
-    return True, "Entry quality passed."
 
+    return True, "Entry quality passed."
 
 def open_paper_copy_trade(
     mint: str,
@@ -4601,7 +4595,7 @@ async def run_wallet_watch_cycle(context) -> None:
                 if _is_no_details_unknown(analysis):
                     save_pending_unknown_tx(label, wallet_address, latest_signature, latest_block_time)
 
-                if analysis.get("notify"):
+                if analysis.get("notify") or _is_paper_relevant_analysis(analysis):
                     maybe_register_active_token(
                         label=label,
                         wallet_address=wallet_address,
@@ -4666,7 +4660,7 @@ async def run_wallet_watch_cycle(context) -> None:
                 if _is_no_details_unknown(analysis):
                     save_pending_unknown_tx(label, wallet_address, signature, tx.get("blockTime"))
 
-                if analysis.get("notify"):
+                if analysis.get("notify") or _is_paper_relevant_analysis(analysis):
                     maybe_register_active_token(
                         label=label,
                         wallet_address=wallet_address,
@@ -4724,7 +4718,7 @@ async def run_wallet_watch_cycle(context) -> None:
             if _is_no_details_unknown(analysis):
                 save_pending_unknown_tx(label, wallet_address, signature, tx.get("blockTime"))
 
-            if analysis.get("notify"):
+            if analysis.get("notify") or _is_paper_relevant_analysis(analysis):
                 important_items.append((tx, analysis, ignored_count))
             else:
                 ignored_count += 1
@@ -5306,6 +5300,88 @@ def build_cluster_armed_message(label: str, wallet_address: str, mint: str, sign
 
 
 # Override: Cluster IN arms the trade; Cluster OUT/SELL exits.
+def _has_any_paper_copy_trade_for_mint(mint: str) -> bool:
+    """Return True if this mint was already opened before.
+
+    This prevents repeated Paper entries on the same token, even if the trade is
+    already closed. The user rule is: first group entry only, one Paper trade per
+    mint.
+    """
+    if not mint:
+        return False
+
+    _ensure_paper_copy_table()
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM paper_copy_trades
+            WHERE mint = ?
+            LIMIT 1
+            """,
+            (mint,),
+        ).fetchone()
+
+    return bool(row)
+
+
+def _is_group_entry_signal_for_mint(
+    label: str,
+    wallet_address: str,
+    analysis: dict[str, Any],
+    mint: str,
+) -> bool:
+    """V4.30: any watched group wallet entering a new mint is a Paper entry.
+
+    No symbol/family filter.
+    No liquidity/volume/buy-sell-ratio filter.
+    The only requirements are:
+    - the signal came from a watched/group wallet,
+    - this wallet gained this mint,
+    - the event looks like BUY / IN / receive / swap.
+    """
+    if not mint:
+        return False
+
+    try:
+        watched_wallets = set(get_all_watch_wallets().values())
+    except Exception:
+        watched_wallets = set(WATCH_WALLETS.values())
+
+    is_group_wallet = (
+        wallet_address in watched_wallets
+        or label == "DHT8 Main"
+        or "GAMq" in label
+        or "BJsbr" in label
+        or _is_cluster_like_label(label)
+    )
+    if not is_group_wallet:
+        return False
+
+    has_positive_mint = False
+    for change in analysis.get("token_changes") or []:
+        if change.get("mint") != mint:
+            continue
+        if _to_decimal(change.get("delta")) > 0:
+            has_positive_mint = True
+            break
+
+    if not has_positive_mint:
+        return False
+
+    analysis_type = analysis.get("type", "")
+    entry_keywords = (
+        "BUY",
+        "Distribution IN",
+        "Transfer IN",
+        "Cluster Receive",
+        "TOKEN SWAP",
+    )
+
+    return any(keyword in analysis_type for keyword in entry_keywords)
+
+
+# Override V4.30: any watched group wallet entering a new mint opens one Paper entry.
 def maybe_handle_paper_copy_signal(
     label: str,
     wallet_address: str,
@@ -5323,61 +5399,27 @@ def maybe_handle_paper_copy_signal(
 
     analysis_type = analysis.get("type", "")
     token_family = analysis.get("token_family") or token_family_for_mint(mint)
-    first_cluster_in_alert_needed = (
-        _is_group_arm_signal_for_mint(label, analysis, mint)
-        and not _has_first_cluster_in_alert_been_sent(mint)
-    )
-    # Record and discover cluster behavior every time we see a large group event.
-    if "Distribution" in analysis_type or "SELL" in analysis_type or "BUY" in analysis_type:
-        if _large_token_amount_for_mint(analysis, mint) >= CLUSTER_DISCOVERY_MIN_AMOUNT or _is_cluster_like_label(label) or label == "DHT8 Main":
+
+    # Record and discover cluster behavior whenever a meaningful group event appears.
+    if "Distribution" in analysis_type or "Transfer" in analysis_type or "SELL" in analysis_type or "BUY" in analysis_type:
+        if (
+            _large_token_amount_for_mint(analysis, mint) >= CLUSTER_DISCOVERY_MIN_AMOUNT
+            or _is_cluster_like_label(label)
+            or label == "DHT8 Main"
+            or "GAMq" in label
+            or "BJsbr" in label
+        ):
             record_cluster_wallet_event(
                 label=label,
                 wallet_address=wallet_address,
                 mint=mint,
                 analysis=analysis,
                 signature=signature,
-                source="wallet_watch_v4_17",
+                source="wallet_watch_v4_30",
             )
             discover_related_wallets_from_tx(signature, mint, label, analysis_type)
-            if first_cluster_in_alert_needed:
-                messages.append(
-                    build_first_cluster_in_alert(
-                        label=label,
-                        wallet_address=wallet_address,
-                        mint=mint,
-                        signature=signature,
-                        analysis=analysis,
-                    )
-                )
-            if first_cluster_in_alert_needed:
-                messages.append(
-                    build_first_cluster_in_alert(
-                        label=label,
-                        wallet_address=wallet_address,
-                        mint=mint,
-                        signature=signature,
-                        analysis=analysis,
-                    )
-                )
 
-                dex_info = fetch_dex_token_info(mint)
-                if dex_info:
-                    messages.append(
-                        open_paper_copy_trade(
-                            mint=mint,
-                            label=label,
-                            wallet_address=wallet_address,
-                            signature=signature,
-                            analysis={
-                                **analysis,
-                                "token_family": token_family,
-                                "paper_reason": "First group IN entry from any cluster wallet.",
-                            },
-                            dex_info=dex_info,
-                        )
-                    )
-                    return messages
-    # DHT8 Distribution IN is still the earliest watch signal.
+    # DHT8 Distribution IN remains a watch alert, but entry is no longer limited to DHT8/SPCX/SLX.
     messages.extend(
         maybe_handle_new_mint_watch_signal(
             label=label,
@@ -5401,13 +5443,21 @@ def maybe_handle_paper_copy_signal(
             )
             if fast_kill_message:
                 messages.append(fast_kill_message)
-            update_new_mint_watch_status(mint=mint, status="EXIT_RISK", last_alert="DHT8_DISTRIBUTION_OUT")
+            update_new_mint_watch_status(
+                mint=mint,
+                status="EXIT_RISK",
+                last_alert="DHT8_DISTRIBUTION_OUT",
+            )
 
     if "GAMq" in label and ("SELL" in analysis_type or "Distribution OUT" in analysis_type):
         if get_new_mint_watch(mint):
-            update_new_mint_watch_status(mint=mint, status="GAMQ_EXIT", last_alert="GAMQ_EXIT_ACTIVITY")
+            update_new_mint_watch_status(
+                mint=mint,
+                status="GAMQ_EXIT",
+                last_alert="GAMQ_EXIT_ACTIVITY",
+            )
 
-     # V4.29: group exit signal is pressure only, not immediate final exit.
+    # Exit logic is preserved: group OUT/SELL is pressure-based, not entry-related.
     if open_trade and _is_group_exit_signal_for_mint(label, analysis, mint):
         exit_messages = maybe_close_paper_copy_on_wallet_out_pressure(
             trade=open_trade,
@@ -5415,13 +5465,13 @@ def maybe_handle_paper_copy_signal(
             wallet_address=wallet_address,
             signature=signature,
             analysis=analysis,
-            source="group_exit_signal",
+            source="group_exit_signal_v4_30",
         )
         if exit_messages:
             messages.extend(exit_messages)
             return messages
 
-    # Cluster IN after entry arms a recipient; it does not close by itself.
+    # Cluster IN after an existing entry arms the wallet only; no duplicate entry.
     if open_trade and _is_group_arm_signal_for_mint(label, analysis, mint):
         record_cluster_wallet_event(
             label=label,
@@ -5429,7 +5479,7 @@ def maybe_handle_paper_copy_signal(
             mint=mint,
             analysis=analysis,
             signature=signature,
-            source="armed_recipient_after_entry",
+            source="armed_recipient_after_entry_v4_30",
         )
         messages.append(build_cluster_armed_message(label, wallet_address, mint, signature, analysis))
         return messages
@@ -5437,25 +5487,25 @@ def maybe_handle_paper_copy_signal(
     if open_trade:
         return messages
 
-    # Entry rule: known early buyer or behavior-confirmed wallet buys.
-    if not _is_paper_entry_wallet(label):
-        return messages
-    if "BUY" not in analysis_type:
-        return messages
-    if not _is_paper_allowed_family(token_family):
+    # V4.30 entry rule:
+    # Any watched/group wallet entering a new mint opens exactly one Paper trade.
+    # No SPCX/SLX filter. No Initial Buyer/G8R7 filter. No liquidity/volume/ratio filter.
+    if not _is_group_entry_signal_for_mint(label, wallet_address, analysis, mint):
         return messages
 
-    dex_info = fetch_dex_token_info(mint)
-    if not dex_info:
-        return messages
-    passed, _reason = _paper_entry_quality(dex_info)
-    if not passed:
+    # Do not re-enter the same mint after a prior open/closed Paper trade.
+    if _has_any_paper_copy_trade_for_mint(mint):
         return messages
 
-    watched_mint = get_new_mint_watch(mint)
-    paper_reason = "Early known cluster buyer pattern."
-    if watched_mint:
-        paper_reason = "DHT8 New Mint Watch confirmed by early buyer."
+    dex_info = fetch_dex_token_info(mint) or {}
+    entry_price = dex_info.get("price_usd") or Decimal("0")
+    if entry_price <= 0:
+        return messages
+
+    paper_reason = (
+        "V4.30 first group wallet entry on a new mint. "
+        "No family/initial-buyer/liquidity/volume/ratio filter."
+    )
 
     messages.append(
         open_paper_copy_trade(
@@ -5463,12 +5513,15 @@ def maybe_handle_paper_copy_signal(
             label=label,
             wallet_address=wallet_address,
             signature=signature,
-            analysis={**analysis, "token_family": token_family, "paper_reason": paper_reason},
+            analysis={
+                **analysis,
+                "token_family": token_family,
+                "paper_reason": paper_reason,
+            },
             dex_info=dex_info,
         )
     )
     return messages
-
 
 def maybe_close_paper_copy_from_digest_event(
     label: str,
