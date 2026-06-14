@@ -2150,6 +2150,13 @@ def _paper_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
 
     if price <= 0:
         return False, "Price is not available."
+    print(
+        f"[ENTRY_CHECK] "
+        f"price={price} "
+        f"liq={liquidity} "
+        f"vol={volume_h1} "
+        f"ratio={ratio}"
+    )
 
     if liquidity < PAPER_MIN_LIQUIDITY_USD:
         return False, f"Liquidity below {_fmt_usd(PAPER_MIN_LIQUIDITY_USD)}."
