@@ -3860,7 +3860,6 @@ def monitor_paper_copy_trades() -> list[str]:
 
         if (
             PAPER_AFTER_TP1_TIME_PROTECTION_ENABLED
-            and tp1_done
             and pair_age_hours >= PAPER_AFTER_TP1_MAX_HOLD_HOURS
             and pnl_pct > 0
         ):
@@ -3868,9 +3867,9 @@ def monitor_paper_copy_trades() -> list[str]:
                 close_paper_copy_trade(
                     trade=trade,
                     reason=(
-                        f"V4.29 pair-age final exit: pair age reached "
+                        f"V4.31 pair-age profit exit: pair age reached "
                         f"{_fmt_decimal(PAPER_AFTER_TP1_MAX_HOLD_HOURS, 0)}h "
-                        f"and remaining position is profitable."
+                        f"and position is profitable, even without TP1.
                     ),
                     dex_info=dex_info,
                 )
