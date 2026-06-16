@@ -3869,7 +3869,7 @@ def monitor_paper_copy_trades() -> list[str]:
                     reason=(
                         f"V4.31 pair-age profit exit: pair age reached "
                         f"{_fmt_decimal(PAPER_AFTER_TP1_MAX_HOLD_HOURS, 0)}h "
-                        f"and position is profitable, even without TP1.
+                        f"and position is profitable, even without TP1."
                     ),
                     dex_info=dex_info,
                 )
