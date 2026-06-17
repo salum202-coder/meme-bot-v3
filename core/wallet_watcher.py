@@ -6151,7 +6151,20 @@ def build_exit_ranking_message() -> str:
     ])
 
     return "\n".join(lines)
-
+def _fmt_pattern_age(first_seen_at: str | None, event_at: str | None) -> str:
+    if not first_seen_at or not event_at:
+        return "-"
+    try:
+        start = datetime.fromisoformat(str(first_seen_at).replace("Z", "+00:00"))
+        event = datetime.fromisoformat(str(event_at).replace("Z", "+00:00"))
+        minutes = int((event - start).total_seconds() // 60)
+        if minutes < 0:
+            return "-"
+        if minutes >= 60:
+            return f"{minutes // 60}h {minutes % 60}m"
+        return f"{minutes}m"
+    except Exception:
+        return "-"
 def build_pattern_brain_message() -> str:
     _ensure_pattern_brain_tables()
     with get_conn() as conn:
@@ -6227,6 +6240,7 @@ def build_pattern_brain_message() -> str:
                     f"  Cluster IN: {r.get('cluster_in_count') or 0} | Cluster OUT/SELL: {r.get('cluster_out_count') or 0}",
                     f"  Paper Entry: {r.get('paper_entry_count') or 0} | Paper Exit: {r.get('paper_exit_count') or 0}{pnl_text}",
                     f"  Last: {r.get('last_event_kind') or 'N/A'} / {r.get('last_event_label') or 'N/A'}",
+                    f"  Timing: DHT8 IN {_fmt_pattern_age(r.get('first_seen_at'), r.get('dht8_in_at'))} | DHT8 OUT {_fmt_pattern_age(r.get('first_seen_at'), r.get('dht8_out_at'))} | First OUT {_fmt_pattern_age(r.get('first_seen_at'), r.get('first_cluster_out_at'))} | GAMq {_fmt_pattern_age(r.get('first_seen_at'), r.get('first_gamq_at'))} | Entry {_fmt_pattern_age(r.get('first_seen_at'), r.get('first_paper_entry_at'))} | Exit {_fmt_pattern_age(r.get('first_seen_at'), r.get('first_paper_exit_at'))}",
                     "",
                 ]
             )
