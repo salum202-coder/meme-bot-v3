@@ -5103,6 +5103,14 @@ def discover_related_wallets_from_tx(signature: str, mint: str, source_label: st
         return
 
     owner_deltas = _token_owner_deltas_for_mint(details, mint)
+    
+        record_wallet_link_events_from_deltas(
+        mint=mint,
+        signature=signature,
+        owner_deltas=owner_deltas,
+        source_label=source_label,
+        source_event=source_event,
+    )
     for owner, delta in owner_deltas.items():
         if not owner:
             continue
@@ -5124,7 +5132,142 @@ def discover_related_wallets_from_tx(signature: str, mint: str, source_label: st
             source=f"tx_discovery:{source_label}:{source_event}",
         )
 
+# V4.33 — Passive Wallet Link Graph
+def _ensure_wallet_link_tables() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wallet_link_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                detected_at TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                mint TEXT NOT NULL,
+                from_wallet TEXT NOT NULL,
+                to_wallet TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                source_label TEXT,
+                source_event TEXT,
+                UNIQUE(signature, mint, from_wallet, to_wallet)
+            )
+            """
+        )
+        conn.commit()
 
+
+def record_wallet_link_events_from_deltas(
+    *,
+    mint: str,
+    signature: str,
+    owner_deltas: dict[str, Decimal],
+    source_label: str = "",
+    source_event: str = "",
+) -> None:
+    if not mint or not signature or not owner_deltas:
+        return
+
+    negatives = [
+        (w, abs(d))
+        for w, d in owner_deltas.items()
+        if d < 0 and abs(d) >= CLUSTER_DISCOVERY_MIN_AMOUNT
+    ]
+    positives = [
+        (w, d)
+        for w, d in owner_deltas.items()
+        if d > 0 and d >= CLUSTER_DISCOVERY_MIN_AMOUNT
+    ]
+
+    if not negatives or not positives:
+        return
+
+    _ensure_wallet_link_tables()
+    now = _now_iso()
+
+    with get_conn() as conn:
+        for from_wallet, out_amount in negatives:
+            for to_wallet, in_amount in positives:
+                if from_wallet == to_wallet:
+                    continue
+
+                amount = min(out_amount, in_amount)
+
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO wallet_link_events (
+                        detected_at, signature, mint, from_wallet, to_wallet,
+                        amount, source_label, source_event
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        now,
+                        signature,
+                        mint,
+                        from_wallet,
+                        to_wallet,
+                        str(amount),
+                        source_label,
+                        source_event,
+                    ),
+                )
+
+        conn.commit()
+
+
+def build_wallet_links_report(limit: int = 25) -> str:
+    _ensure_wallet_link_tables()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                from_wallet,
+                to_wallet,
+                COUNT(*) AS links,
+                COUNT(DISTINCT mint) AS mints,
+                MAX(detected_at) AS last_seen,
+                MAX(mint) AS last_mint,
+                MAX(amount) AS max_amount
+            FROM wallet_link_events
+            GROUP BY from_wallet, to_wallet
+            ORDER BY links DESC, mints DESC, last_seen DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    lines = [
+        "🔗 Wallet Links V4.33",
+        "",
+        "Mode: Passive learning only. No entry/exit decisions changed.",
+        "Inferred from token owner balance deltas inside the same transaction.",
+        "",
+    ]
+
+    if not rows:
+        lines.append("No wallet links recorded yet.")
+        return "\n".join(lines)
+
+    for i, row in enumerate(rows, 1):
+        r = dict(row)
+        lines.extend(
+            [
+                f"{i}) {_short(r.get('from_wallet'))} → {_short(r.get('to_wallet'))}",
+                f"   Links: {r.get('links') or 0} | Mints: {r.get('mints') or 0}",
+                f"   Last mint: {_short(r.get('last_mint'))}",
+                f"   Max amount: {r.get('max_amount')}",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "How to use:",
+            "- Repeated links reveal wallet relationships.",
+            "- Example: DHT8 → GAMq means DHT8 likely routes tokens to GAMq.",
+            "- This is analysis only.",
+        ]
+    )
+
+    return "\n".join(lines)
 def list_discovered_cluster_wallets(limit: int = 80) -> list[dict[str, Any]]:
     _ensure_cluster_discovery_tables()
     with get_conn() as conn:
