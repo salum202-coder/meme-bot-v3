@@ -15,6 +15,7 @@ from telegram_bot.handlers_wallet import wallet_handler
 from telegram_bot.handlers_positions import positions_handler
 from telegram_bot.handlers_trades import trades_handler
 from telegram_bot.handlers_wallet_watch import (
+    wallet_links_handler,
     cluster_handler,
     copy_positions_handler,
     copy_trades_handler,
@@ -48,6 +49,7 @@ def build_bot_application():
     app.add_handler(CommandHandler("cluster_map", cluster_map_handler))
     app.add_handler(CommandHandler("pattern_brain", pattern_brain_handler))
     app.add_handler(CommandHandler("exit_ranking", exit_ranking_handler))
+    app.add_handler(CommandHandler("links", wallet_links_handler))
     app.add_handler(CommandHandler("copy_positions", copy_positions_handler))
     app.add_handler(CommandHandler("copy_trades", copy_trades_handler))
     app.add_handler(CommandHandler("copy_wallet", copy_wallet_handler))
