@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes
 from core.wallet_watcher import (
     WATCH_WALLETS,
     build_copy_positions_message,
+    build_wallet_links_report,
     build_copy_trades_message,
     build_copy_wallet_message,
     manual_close_paper_copy_trade,
@@ -240,3 +241,8 @@ async def exit_ranking_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text(
             f"❌ Exit Ranking error:\n{type(e).__name__}: {e}"
         )
+        async def wallet_links_handler(update, context):
+    await update.message.reply_text(
+        build_wallet_links_report(),
+        disable_web_page_preview=True,
+    )
