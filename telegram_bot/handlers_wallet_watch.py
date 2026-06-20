@@ -241,7 +241,7 @@ async def exit_ranking_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text(
             f"❌ Exit Ranking error:\n{type(e).__name__}: {e}"
         )
-        async def wallet_links_handler(update, context):
+async def wallet_links_handler(update, context):
     await update.message.reply_text(
         build_wallet_links_report(),
         disable_web_page_preview=True,
