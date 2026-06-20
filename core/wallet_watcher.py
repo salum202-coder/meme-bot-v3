@@ -5104,7 +5104,7 @@ def discover_related_wallets_from_tx(signature: str, mint: str, source_label: st
 
     owner_deltas = _token_owner_deltas_for_mint(details, mint)
     
-        record_wallet_link_events_from_deltas(
+    record_wallet_link_events_from_deltas(
         mint=mint,
         signature=signature,
         owner_deltas=owner_deltas,
