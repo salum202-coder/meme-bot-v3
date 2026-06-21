@@ -5289,7 +5289,6 @@ def build_entry_debug_report(limit: int = 20) -> str:
 
 
 def list_discovered_cluster_wallets(limit: int = 80) -> list[dict[str, Any]]:
-def list_discovered_cluster_wallets(limit: int = 80) -> list[dict[str, Any]]:
     _ensure_cluster_discovery_tables()
     with get_conn() as conn:
         rows = conn.execute(
