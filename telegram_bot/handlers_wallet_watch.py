@@ -6,6 +6,7 @@ from decimal import Decimal
 from telegram import Update
 from telegram.ext import ContextTypes
 
+
 from core.wallet_watcher import (
     WATCH_WALLETS,
     build_copy_positions_message,
@@ -18,6 +19,8 @@ from core.wallet_watcher import (
     build_pattern_brain_message,
     build_exit_ranking_message,
 )
+
+from core.solana_group_forensics import build_forensics_report
 from storage.repository_wallet_watch import get_wallet_watch_states
 
 
@@ -252,3 +255,16 @@ async def entry_debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         build_entry_debug_report(),
         disable_web_page_preview=True,
     )
+
+async def forensics_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _set_chat_id(update, context)
+
+    try:
+        await _reply_long_text(
+            update,
+            build_forensics_report(),
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"❌ Forensics error:\n{type(e).__name__}: {e}"
+        )
