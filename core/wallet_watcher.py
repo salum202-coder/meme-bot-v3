@@ -14,7 +14,7 @@ from storage.repository_wallet_watch import (
     get_last_signature,
     save_wallet_signature,
 )
-
+from core.solana_group_forensics import add_forensics_event
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens"
 
@@ -5868,6 +5868,15 @@ def record_pattern_brain_event(
 
     _ensure_pattern_brain_tables()
     now = _now_iso()
+        try:
+        add_forensics_event(
+            event_type=event_kind or "PATTERN_EVENT",
+            token=mint,
+            wallet=wallet_address or label,
+            details=f"label={label} source={source} signature={signature} notes={notes}",
+        )
+    except Exception:
+        pass
     analysis = analysis or {}
     kind = _pattern_event_kind(label, analysis, event_kind)
     analysis_type = analysis.get("type") or kind
