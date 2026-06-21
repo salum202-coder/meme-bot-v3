@@ -5868,7 +5868,7 @@ def record_pattern_brain_event(
 
     _ensure_pattern_brain_tables()
     now = _now_iso()
-    try:
+        try:
         add_forensics_event(
             event_type=event_kind or "PATTERN_EVENT",
             token=mint,
