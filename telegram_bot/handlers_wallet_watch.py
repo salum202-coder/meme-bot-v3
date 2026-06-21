@@ -10,6 +10,7 @@ from core.wallet_watcher import (
     WATCH_WALLETS,
     build_copy_positions_message,
     build_wallet_links_report,
+    build_entry_debug_report,
     build_copy_trades_message,
     build_copy_wallet_message,
     manual_close_paper_copy_trade,
@@ -244,5 +245,10 @@ async def exit_ranking_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def wallet_links_handler(update, context):
     await update.message.reply_text(
         build_wallet_links_report(),
+        disable_web_page_preview=True,
+    )
+async def entry_debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        build_entry_debug_report(),
         disable_web_page_preview=True,
     )
