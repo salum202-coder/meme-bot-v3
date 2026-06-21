@@ -26,6 +26,7 @@ from telegram_bot.handlers_wallet_watch import (
     cluster_map_handler,
     pattern_brain_handler,
     exit_ranking_handler,
+    entry_debug_handler,
 )
 from telegram_bot.handlers_digest import digest_handler
 from telegram_bot.handlers_menu import menu_handler
@@ -49,6 +50,7 @@ def build_bot_application():
     app.add_handler(CommandHandler("cluster_map", cluster_map_handler))
     app.add_handler(CommandHandler("pattern_brain", pattern_brain_handler))
     app.add_handler(CommandHandler("exit_ranking", exit_ranking_handler))
+    app.add_handler(CommandHandler("entry_debug", entry_debug_handler))
     app.add_handler(CommandHandler("links", wallet_links_handler))
     app.add_handler(CommandHandler("copy_positions", copy_positions_handler))
     app.add_handler(CommandHandler("copy_trades", copy_trades_handler))
