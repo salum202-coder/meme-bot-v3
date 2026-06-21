@@ -5268,6 +5268,27 @@ def build_wallet_links_report(limit: int = 25) -> str:
     )
 
     return "\n".join(lines)
+    return "\n".join(lines)
+
+
+def build_entry_debug_report(limit: int = 20) -> str:
+    lines = [
+        "🧪 Entry Debug V4.34",
+        "",
+        "Purpose: Show why recent group activity did not become Paper Entry.",
+        "",
+        "Current likely blockers:",
+        "- No group entry signal",
+        "- Mint already had a previous Paper trade",
+        "- DexScreener price unavailable",
+        "- Missed older tx when last_signature is not found",
+        "",
+        "Next step: add persistent blocked-entry logging.",
+    ]
+    return "\n".join(lines)
+
+
+def list_discovered_cluster_wallets(limit: int = 80) -> list[dict[str, Any]]:
 def list_discovered_cluster_wallets(limit: int = 80) -> list[dict[str, Any]]:
     _ensure_cluster_discovery_tables()
     with get_conn() as conn:
