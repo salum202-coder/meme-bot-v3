@@ -143,7 +143,7 @@ def add_forensics_event(
                 ),
             )
             conn.commit()
-except Exception as e:
+ except Exception as e:
     print(f"[FORENSICS_ERROR] {type(e).__name__}: {e}")
     return
 
