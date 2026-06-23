@@ -8,6 +8,11 @@ from typing import Any
 
 from config import settings
 
+try:
+    from core.forensics_timeline import build_forensics_timeline_report
+except Exception:
+    build_forensics_timeline_report = None
+
 
 FORENSICS_VERSION = "V4.36"
 SYSTEM_MINTS = {
@@ -151,6 +156,12 @@ def add_forensics_event(
 
 def build_forensics_report(limit: int = 30) -> str:
     _ensure_tables()
+
+    if build_forensics_timeline_report:
+        try:
+            return build_forensics_timeline_report(limit=limit)
+        except Exception as e:
+            print(f"[FORENSICS_TIMELINE_ERROR] {type(e).__name__}: {e}")
 
     with _connect() as conn:
         total = conn.execute(
