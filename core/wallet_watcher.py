@@ -232,6 +232,20 @@ PAPER_M5_SELL_PRESSURE_MIN_SELLS = 5
 PAPER_COPY_WALLET_STARTING_BALANCE_USD = Decimal("10.00")
 PAPER_COPY_TRADE_SIZE_USD = Decimal("1.00")
 
+# V4.32 — Paper statistics cleanup
+# Abnormal meme-token results are kept in the trade log, but excluded from
+# wallet balance, average PnL, and clean success-rate style summaries.
+PAPER_STATS_MAX_REALISTIC_PNL_PCT = Decimal("1000")
+PAPER_STATS_MIN_EXIT_LIQUIDITY_USD = Decimal("500")
+
+# V4.32 — Group entry safety filter
+# This protects broad V4.30 "first group wallet entry" from entering obvious
+# bad/illiquid/too-large tokens such as Questium/NVDAx/SPCXxc edge cases.
+GROUP_ENTRY_MAX_PRICE_USD = Decimal("10")
+GROUP_ENTRY_MIN_LIQUIDITY_USD = Decimal("50000")
+GROUP_ENTRY_MAX_LIQUIDITY_USD = Decimal("1000000")
+GROUP_ENTRY_MIN_VOLUME_H1_USD = Decimal("20000")
+
 # First Big Distribution Exit V4.18
 # After a Paper Copy entry, any large Cluster Distribution IN/OUT on the same mint
 # is treated as a final exit signal. This is intentionally aggressive because
@@ -2060,24 +2074,70 @@ def list_all_paper_copy_trades() -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+def _is_abnormal_paper_copy_trade(trade: dict[str, Any]) -> bool:
+    """Return True when a closed Paper Copy trade should not affect stats.
+
+    The trade remains visible in history. Only wallet accounting and averages
+    ignore it, so one impossible DexScreener print cannot inflate performance.
+    """
+    pnl_pct = _to_decimal(trade.get("pnl_pct"))
+    exit_liquidity = _to_decimal(trade.get("last_liquidity_usd"))
+
+    if pnl_pct > PAPER_STATS_MAX_REALISTIC_PNL_PCT:
+        return True
+
+    if exit_liquidity > 0 and exit_liquidity < PAPER_STATS_MIN_EXIT_LIQUIDITY_USD:
+        return True
+
+    return False
+
+
+def _paper_copy_clean_closed_trades(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        trade for trade in trades
+        if trade.get("status") == "CLOSED"
+        and not _is_abnormal_paper_copy_trade(trade)
+    ]
+
+
 def paper_copy_summary_counts() -> dict[str, Any]:
     _ensure_paper_copy_table()
 
     with get_conn() as conn:
-        total_closed = conn.execute(
-            "SELECT COUNT(*) AS c FROM paper_copy_trades WHERE status = 'CLOSED'"
-        ).fetchone()["c"]
         total_open = conn.execute(
             "SELECT COUNT(*) AS c FROM paper_copy_trades WHERE status = 'OPEN'"
         ).fetchone()["c"]
-        avg_row = conn.execute(
-            "SELECT AVG(pnl_pct) AS avg_pnl FROM paper_copy_trades WHERE status = 'CLOSED'"
-        ).fetchone()
+
+        rows = conn.execute(
+            "SELECT * FROM paper_copy_trades WHERE status = 'CLOSED'"
+        ).fetchall()
+
+    closed_trades = [dict(row) for row in rows]
+    clean_closed = [
+        trade for trade in closed_trades
+        if not _is_abnormal_paper_copy_trade(trade)
+    ]
+    excluded_count = len(closed_trades) - len(clean_closed)
+
+    wins = sum(1 for trade in clean_closed if _to_decimal(trade.get("pnl_pct")) > 0)
+    losses = sum(1 for trade in clean_closed if _to_decimal(trade.get("pnl_pct")) < 0)
+
+    avg_pnl = Decimal("0")
+    if clean_closed:
+        avg_pnl = sum(
+            (_to_decimal(trade.get("pnl_pct")) for trade in clean_closed),
+            Decimal("0"),
+        ) / Decimal(len(clean_closed))
 
     return {
         "open": total_open or 0,
-        "closed": total_closed or 0,
-        "avg_pnl": _to_decimal(avg_row["avg_pnl"] if avg_row else 0),
+        "closed": len(closed_trades),
+        "clean_closed": len(clean_closed),
+        "excluded": excluded_count,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": (Decimal(wins) / Decimal(len(clean_closed)) * Decimal("100")) if clean_closed else Decimal("0"),
+        "avg_pnl": avg_pnl,
     }
 
 
@@ -2170,6 +2230,30 @@ def _paper_entry_quality(dex_info: dict[str, Any]) -> tuple[bool, str]:
 
     return True, "Entry quality passed."
 
+
+
+def _group_entry_quality_v432(dex_info: dict[str, Any]) -> tuple[bool, str]:
+    """V4.32 safety filter for broad V4.30 group entries."""
+    price = dex_info.get("price_usd") or Decimal("0")
+    liquidity = dex_info.get("liquidity_usd") or Decimal("0")
+    volume_h1 = dex_info.get("volume_h1") or Decimal("0")
+
+    if price <= 0:
+        return False, "Price is not available."
+
+    if price > GROUP_ENTRY_MAX_PRICE_USD:
+        return False, f"Price above {_fmt_usd(GROUP_ENTRY_MAX_PRICE_USD)}."
+
+    if liquidity < GROUP_ENTRY_MIN_LIQUIDITY_USD:
+        return False, f"Liquidity below {_fmt_usd(GROUP_ENTRY_MIN_LIQUIDITY_USD)}."
+
+    if liquidity > GROUP_ENTRY_MAX_LIQUIDITY_USD:
+        return False, f"Liquidity above {_fmt_usd(GROUP_ENTRY_MAX_LIQUIDITY_USD)}."
+
+    if volume_h1 < GROUP_ENTRY_MIN_VOLUME_H1_USD:
+        return False, f"Volume 1H below {_fmt_usd(GROUP_ENTRY_MIN_VOLUME_H1_USD)}."
+
+    return True, "V4.32 group entry safety filter passed."
 def open_paper_copy_trade(
     mint: str,
     label: str,
@@ -2356,6 +2440,7 @@ def close_paper_copy_trade(
                 exit_reason = ?,
                 exit_signature = ?,
                 exit_price_usd = ?,
+                last_liquidity_usd = ?,
                 pnl_pct = ?,
                 closed_at = ?,
                 updated_at = ?
@@ -2366,6 +2451,7 @@ def close_paper_copy_trade(
                 reason,
                 signature or "",
                 _to_float(exit_price),
+                _to_float(dex_info.get("liquidity_usd") or trade.get("last_liquidity_usd") or 0),
                 _to_float(effective_pnl_pct),
                 now,
                 now,
@@ -3851,25 +3937,23 @@ def monitor_paper_copy_trades() -> list[str]:
                 trade = refreshed_trade
             locked_pct = _to_decimal(trade.get("tp1_closed_pct"))
 
-        # V4.29 Pair-age final exit:
-        # Close remaining after the token/pair reaches 3h age, not 3h after TP1.
-        pair_age_seconds = dex_info.get("pair_age_seconds")
-        pair_age_hours = Decimal("0")
-        if pair_age_seconds is not None:
-            pair_age_hours = Decimal(str(pair_age_seconds)) / Decimal("3600")
+        # V4.32 Position-age final exit:
+        # Use the age of this Paper position, not DexScreener pair age.
+        # This prevents instant exits when the bot enters an already-older pair.
+        position_age_hours = _trade_age_hours(trade)
 
         if (
             PAPER_AFTER_TP1_TIME_PROTECTION_ENABLED
-            and pair_age_hours >= PAPER_AFTER_TP1_MAX_HOLD_HOURS
+            and position_age_hours >= PAPER_AFTER_TP1_MAX_HOLD_HOURS
             and pnl_pct > 0
         ):
             messages.append(
                 close_paper_copy_trade(
                     trade=trade,
                     reason=(
-                        f"V4.31 pair-age profit exit: pair age reached "
+                        f"V4.32 position-age profit exit: position age reached "
                         f"{_fmt_decimal(PAPER_AFTER_TP1_MAX_HOLD_HOURS, 0)}h "
-                        f"and position is profitable, even without TP1."
+                        f"and position is profitable."
                     ),
                     dex_info=dex_info,
                 )
@@ -4025,7 +4109,8 @@ def build_copy_positions_message() -> str:
                 "No open paper copy positions.",
                 "",
                 f"Closed trades: {counts.get('closed', 0)}",
-                f"Average closed PnL: {_fmt_decimal(counts.get('avg_pnl') or Decimal('0'), 2)}%",
+                f"Clean closed: {counts.get('clean_closed', 0)} | Excluded: {counts.get('excluded', 0)}",
+                f"Clean average PnL: {_fmt_decimal(counts.get('avg_pnl') or Decimal('0'), 2)}%",
                 "",
                 "Mode: Paper only. No real positions.",
             ]
@@ -4086,7 +4171,9 @@ def build_copy_trades_message(limit: int = 10) -> str:
         "",
         f"Closed trades shown: {len(trades)}",
         f"Total closed: {counts.get('closed', 0)}",
-        f"Average PnL: {_fmt_decimal(counts.get('avg_pnl') or Decimal('0'), 2)}%",
+        f"Clean closed: {counts.get('clean_closed', 0)} | Excluded: {counts.get('excluded', 0)}",
+        f"Clean average PnL: {_fmt_decimal(counts.get('avg_pnl') or Decimal('0'), 2)}%",
+        f"Clean Win Rate: {_fmt_decimal(counts.get('win_rate') or Decimal('0'), 2)}%",
         "",
     ]
 
@@ -4094,6 +4181,7 @@ def build_copy_trades_message(limit: int = 10) -> str:
         symbol = trade.get("symbol") or "UNKNOWN"
         mint = trade.get("mint")
         pnl = _to_decimal(trade.get("pnl_pct"))
+        abnormal_note = " | EXCLUDED FROM STATS" if _is_abnormal_paper_copy_trade(trade) else ""
         opened_at = trade.get("opened_at")
         closed_at = trade.get("closed_at")
         duration = "N/A"
@@ -4111,7 +4199,7 @@ def build_copy_trades_message(limit: int = 10) -> str:
                 f"{index}) {symbol} | {_short(mint)}",
                 f"Entry: {_fmt_price(_to_decimal(trade.get('entry_price_usd')))}",
                 f"Exit: {_fmt_price(_to_decimal(trade.get('exit_price_usd')))}",
-                f"PnL: {_fmt_decimal(pnl, 2)}%",
+                f"PnL: {_fmt_decimal(pnl, 2)}%{abnormal_note}",
                 f"Locked before final: {_fmt_decimal(_to_decimal(trade.get('tp1_closed_pct')), 2)}% @ {_fmt_decimal(_to_decimal(trade.get('tp1_pnl_pct')), 2)}% avg" if int(trade.get('tp1_done') or 0) else "Locked before final: No",
                 f"Duration: {duration}",
                 f"Reason: {trade.get('exit_reason') or 'N/A'}",
@@ -4172,7 +4260,15 @@ def build_copy_wallet_message() -> str:
 
     trades = list_all_paper_copy_trades()
     open_trades = [trade for trade in trades if trade.get("status") == "OPEN"]
-    closed_trades = [trade for trade in trades if trade.get("status") == "CLOSED"]
+    closed_trades_all = [trade for trade in trades if trade.get("status") == "CLOSED"]
+    excluded_closed_trades = [
+        trade for trade in closed_trades_all
+        if _is_abnormal_paper_copy_trade(trade)
+    ]
+    closed_trades = [
+        trade for trade in closed_trades_all
+        if not _is_abnormal_paper_copy_trade(trade)
+    ]
 
     closed_realized_usd = sum(
         (_paper_copy_wallet_closed_realized_usd(trade) for trade in closed_trades),
@@ -4226,7 +4322,9 @@ def build_copy_wallet_message() -> str:
         f"Starting Balance: {_fmt_usd(PAPER_COPY_WALLET_STARTING_BALANCE_USD)}",
         f"Paper Trade Size: {_fmt_usd(PAPER_COPY_TRADE_SIZE_USD)} each",
         f"Open Positions: {len(open_trades)}",
-        f"Closed Trades: {len(closed_trades)}",
+        f"Closed Trades: {len(closed_trades_all)}",
+        f"Clean Closed Trades: {len(closed_trades)}",
+        f"Excluded Abnormal Trades: {len(excluded_closed_trades)}",
         "",
         f"Realized PnL: {_fmt_signed_usd(realized_usd)}",
         f"Unrealized PnL: {_fmt_signed_usd(open_unrealized_usd)}",
@@ -5660,13 +5758,18 @@ def maybe_handle_paper_copy_signal(
         return messages
 
     dex_info = fetch_dex_token_info(mint) or {}
+
+    passed, block_reason = _group_entry_quality_v432(dex_info)
+    if not passed:
+        return messages
+
     entry_price = dex_info.get("price_usd") or Decimal("0")
     if entry_price <= 0:
         return messages
 
     paper_reason = (
-        "V4.30 first group wallet entry on a new mint. "
-        "No family/initial-buyer/liquidity/volume/ratio filter."
+        "V4.32 first group wallet entry on a new mint. "
+        "Passed price/liquidity/volume safety filter."
     )
 
     messages.append(
@@ -6155,93 +6258,6 @@ def _danger_score_for_wallet(row: dict[str, Any]) -> int:
     if out_count == 0 and sell_count == 0 and in_count > 0:
         score = min(score, 45)
     return max(0, min(99, score))
-    def build_mint_review_message(mint_query: str = "") -> str:
-        """V4.26 Mint Review - passive/read-only."""
-        _ensure_pattern_brain_tables()
-
-        mint_query = (mint_query or "").strip()
-
-    with get_conn() as conn:
-        if mint_query:
-            mint_row = conn.execute(
-                """
-                SELECT *
-                FROM cluster_mint_memory
-                WHERE mint LIKE ?
-                ORDER BY last_event_at DESC
-                LIMIT 1
-                """,
-                (f"{mint_query}%",),
-            ).fetchone()
-        else:
-            mint_row = conn.execute(
-                """
-                SELECT *
-                FROM cluster_mint_memory
-                ORDER BY last_event_at DESC
-                LIMIT 1
-                """
-            ).fetchone()
-
-        if not mint_row:
-            return "🔎 Mint Review V4.26\n\nNo mint found."
-
-        mint = dict(mint_row).get("mint")
-
-        events = conn.execute(
-            """
-            SELECT event_kind, label, wallet_address, event_at, price, liquidity
-            FROM cluster_pattern_events
-            WHERE mint = ?
-            ORDER BY event_at ASC
-            LIMIT 120
-            """,
-            (mint,),
-        ).fetchall()
-
-    d = dict(mint_row)
-
-    lines = [
-        "🔎 Mint Review V4.26",
-        "",
-        f"Mint: {_short(mint)}",
-        f"DHT8 IN: {d.get('dht8_in_seen')}",
-        f"DHT8 OUT: {d.get('dht8_out_seen')}",
-        f"GAMq Count: {d.get('gamq_count')}",
-        f"Cluster IN: {d.get('cluster_in_count')}",
-        f"Cluster OUT/SELL: {d.get('cluster_out_count')}",
-        f"Paper Entry: {d.get('paper_entry_seen')}",
-        f"Paper Exit: {d.get('paper_exit_seen')}",
-        f"Final PnL: {d.get('final_pnl_pct') or 'open/unknown'}%",
-        f"Last: {d.get('last_event_kind')} / {d.get('last_label')}",
-        "",
-        "Timeline:",
-    ]
-
-    if not events:
-        lines.append("No events found.")
-        return "\n".join(lines)
-
-    for row in events[-40:]:
-        e = dict(row)
-        price = _to_decimal(e.get("price"))
-        liq = _to_decimal(e.get("liquidity"))
-
-        lines.append(
-            f"- {e.get('event_kind')} | {e.get('label') or 'Unknown'} | "
-            f"{_short(e.get('wallet_address'))} | "
-            f"Price: {_fmt_decimal(price, 8)} | Liq: ${_fmt_decimal(liq, 2)}"
-        )
-
-    lines.extend([
-        "",
-        "How to use:",
-        "- Look for which wallets entered first.",
-        "- Look for which wallets started OUT before dump.",
-        "- Compare this mint with /exit_ranking.",
-    ])
-
-    return "\n".join(lines)
 def build_exit_ranking_message() -> str:
     """V4.26 Exit Wallet Ranking - passive/read-only."""
     _ensure_pattern_brain_tables()
