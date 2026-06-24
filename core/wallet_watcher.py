@@ -15,6 +15,7 @@ from storage.repository_wallet_watch import (
     save_wallet_signature,
 )
 from core.solana_group_forensics import add_forensics_event
+from core.group_intelligence import record_group_event
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens"
 
@@ -3118,6 +3119,20 @@ def maybe_close_paper_copy_on_simple_cluster_out_count(
         return []
 
     dex_info = fetch_dex_token_info(mint) or {}
+
+    try:
+        record_group_event(
+            mint=mint,
+            wallet=wallet_address,
+            label=label,
+            event_type=analysis.get("type") or "GROUP_ACTIVITY",
+            signature=signature,
+            analysis=analysis,
+            dex_info=dex_info,
+            source="wallet_watch_v5_1",
+        )
+    except Exception as e:
+        print(f"[GROUP_INTELLIGENCE_ERROR] {type(e).__name__}: {e}")
 
     return [
         close_paper_copy_trade(
