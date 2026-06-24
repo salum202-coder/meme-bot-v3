@@ -10,7 +10,7 @@ from typing import Any
 from config import settings
 
 
-FORENSICS_TIMELINE_VERSION = "V5.0"
+FORENSICS_TIMELINE_VERSION = "V5.1"
 
 # V5.0 is read-only. It does not change entry/exit decisions.
 # It reconstructs a case timeline from existing forensics_events and paper_copy_trades.
@@ -23,6 +23,36 @@ DANGER_WALLET_KEYWORDS = (
     "47ry",
     "94hQ",
     "4hEf",
+)
+
+# Group Phase Detector V1 is analysis-only.
+# It does not change entry/exit decisions.
+PHASE_ACTIVATION_KEYWORDS = (
+    "DHT8",
+    "3OUE",
+    "JBS2",
+    "A4TT",
+    "5SYP",
+    "6G4V",
+)
+
+PHASE_DISTRIBUTION_KEYWORDS = (
+    "FDWJBF",
+    "AWAO",
+    "DAF6",
+    "BFRG",
+    "G8R7",
+    "9KF7",
+    "HS69",
+    "5QCR",
+)
+
+PHASE_EXIT_PREP_KEYWORDS = (
+    "GAMQ",
+    "47RY",
+    "B6UT",
+    "94HQ",
+    "4HEF",
 )
 
 SYSTEM_MINTS = {
@@ -369,6 +399,68 @@ def _exit_verdict(events: list[dict[str, Any]], trade: dict[str, Any] | None) ->
     return "LATE EXIT", "Bot exited long after the first recorded risk signal."
 
 
+
+def _detect_group_phase(events: list[dict[str, Any]]) -> tuple[str, list[str]]:
+    """Detect the current group phase from recorded timeline events.
+
+    This is analysis-only. It intentionally uses broad wallet-label buckets
+    so the report focuses on the group as a system, not one wallet.
+    """
+    activation = 0
+    distribution = 0
+    exit_prep = 0
+    out_sell = 0
+
+    first_activation = ""
+    first_distribution = ""
+    first_exit_prep = ""
+    first_out_sell = ""
+
+    for event in events:
+        label = _event_label(event).upper()
+        category = _event_category(event).upper()
+        source = _event_source(event).upper()
+        text = f"{label} {category} {source}"
+        detected_at = str(event.get("detected_at") or "")
+
+        if any(keyword in text for keyword in PHASE_ACTIVATION_KEYWORDS):
+            activation += 1
+            if not first_activation:
+                first_activation = detected_at
+
+        if any(keyword in text for keyword in PHASE_DISTRIBUTION_KEYWORDS):
+            distribution += 1
+            if not first_distribution:
+                first_distribution = detected_at
+
+        if any(keyword in text for keyword in PHASE_EXIT_PREP_KEYWORDS):
+            exit_prep += 1
+            if not first_exit_prep:
+                first_exit_prep = detected_at
+
+        if "OUT" in text or "SELL" in text:
+            out_sell += 1
+            if not first_out_sell:
+                first_out_sell = detected_at
+
+    notes: list[str] = [
+        f"Activation signals: {activation}" + (f" | first: {first_activation}" if first_activation else ""),
+        f"Distribution signals: {distribution}" + (f" | first: {first_distribution}" if first_distribution else ""),
+        f"Exit-prep signals: {exit_prep}" + (f" | first: {first_exit_prep}" if first_exit_prep else ""),
+        f"OUT/SELL signals: {out_sell}" + (f" | first: {first_out_sell}" if first_out_sell else ""),
+    ]
+
+    if out_sell >= 1:
+        return "COLLAPSE / EXIT ACTIVE", notes
+    if exit_prep >= 2:
+        return "EXIT PREPARATION", notes
+    if distribution >= 3:
+        return "DISTRIBUTION", notes
+    if activation >= 1:
+        return "ACTIVATION", notes
+
+    return "UNKNOWN", notes
+
 def _build_case_summary(mint: str, events: list[dict[str, Any]], trade: dict[str, Any] | None) -> list[str]:
     if not events and not trade:
         return ["No events found for this mint."]
@@ -388,6 +480,7 @@ def _build_case_summary(mint: str, events: list[dict[str, Any]], trade: dict[str
 
     market = _market_points(events)
     verdict, verdict_reason = _exit_verdict(events, trade)
+    group_phase, phase_notes = _detect_group_phase(events)
 
     lines = [
         "🧬 Token Case File",
@@ -417,6 +510,17 @@ def _build_case_summary(mint: str, events: list[dict[str, Any]], trade: dict[str
         f"- GAMq first seen: {first_gamq.get('detected_at') if first_gamq else 'No'}",
         f"- First OUT/SELL: {first_dist_out.get('detected_at') if first_dist_out else 'No'}",
         f"- Danger wallets seen: {', '.join(danger_seen_unique) if danger_seen_unique else 'No'}",
+        "",
+        "📊 Group Phase Detector V1:",
+        f"- Current phase: {group_phase}",
+        f"- Early wallets tracked: {len(first_wallets)}",
+        f"- Danger wallets reached: {len(danger_seen_unique)}",
+    ])
+
+    for note in phase_notes:
+        lines.append(f"- {note}")
+
+    lines.extend([
         "",
         "Market Snapshot From Stored Details:",
         f"- First price: {_fmt_usd(market['first_price'])}",
@@ -536,7 +640,8 @@ def build_forensics_timeline_report(mint_query: str = "", limit: int = 80) -> st
         "Investigation Notes:",
         "- This report reconstructs what happened from stored bot/forensics events.",
         "- Market snapshots depend on whether price/liquidity were stored in event details.",
-        "- Future V5.1 can enrich events with more market data at recording time.",
+        "- V5.1 adds Group Phase Detector V1 from recorded group events.",
+        "- Future V5.2 can enrich events with more market data at recording time.",
     ])
 
     return "\n".join(lines).strip()
