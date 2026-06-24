@@ -259,10 +259,14 @@ async def entry_debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def forensics_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _set_chat_id(update, context)
 
+    mint_query = ""
+    if context.args:
+        mint_query = " ".join(context.args).strip()
+
     try:
         await _reply_long_text(
             update,
-            build_forensics_report(),
+            build_forensics_report(mint_query=mint_query),
         )
     except Exception as e:
         await update.effective_message.reply_text(
