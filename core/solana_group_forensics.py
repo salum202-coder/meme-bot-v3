@@ -154,12 +154,15 @@ def add_forensics_event(
         return
 
 
-def build_forensics_report(limit: int = 30) -> str:
+def build_forensics_report(limit: int = 30, mint_query: str = "") -> str:
     _ensure_tables()
 
     if build_forensics_timeline_report:
         try:
-            return build_forensics_timeline_report(limit=limit)
+            return build_forensics_timeline_report(
+                mint_query=mint_query,
+                limit=limit,
+            )
         except Exception as e:
             print(f"[FORENSICS_TIMELINE_ERROR] {type(e).__name__}: {e}")
 
