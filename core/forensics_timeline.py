@@ -45,14 +45,16 @@ PHASE_DISTRIBUTION_KEYWORDS = (
     "9KF7",
     "HS69",
     "5QCR",
+    "GAMQ",
 )
 
 PHASE_EXIT_PREP_KEYWORDS = (
-    "GAMQ",
-    "47RY",
     "B6UT",
+    "47RY",
     "94HQ",
     "4HEF",
+    "2E8C",
+    "9CQ6",
 )
 
 SYSTEM_MINTS = {
