@@ -10,7 +10,7 @@ from typing import Any
 from config import settings
 
 
-FORENSICS_TIMELINE_VERSION = "V5.1"
+FORENSICS_TIMELINE_VERSION = "V5.2"
 
 # V5.0 is read-only. It does not change entry/exit decisions.
 # It reconstructs a case timeline from existing forensics_events and paper_copy_trades.
@@ -25,7 +25,7 @@ DANGER_WALLET_KEYWORDS = (
     "4hEf",
 )
 
-# Group Phase Detector V1 is analysis-only.
+# Group Phase Detector V2 is analysis-only.
 # It does not change entry/exit decisions.
 PHASE_ACTIVATION_KEYWORDS = (
     "DHT8",
@@ -443,11 +443,32 @@ def _detect_group_phase(events: list[dict[str, Any]]) -> tuple[str, list[str]]:
             if not first_out_sell:
                 first_out_sell = detected_at
 
+    lead_time = "N/A"
+    warning = "LOW"
+
+    if first_exit_prep and first_out_sell:
+        lead_time = _duration_text(first_exit_prep, first_out_sell)
+
+    if out_sell >= 1:
+        warning = "CRITICAL"
+    elif exit_prep >= 5:
+        warning = "HIGH"
+    elif exit_prep >= 2 or distribution >= 5:
+        warning = "MEDIUM"
+
     notes: list[str] = [
-        f"Activation signals: {activation}" + (f" | first: {first_activation}" if first_activation else ""),
-        f"Distribution signals: {distribution}" + (f" | first: {first_distribution}" if first_distribution else ""),
-        f"Exit-prep signals: {exit_prep}" + (f" | first: {first_exit_prep}" if first_exit_prep else ""),
-        f"OUT/SELL signals: {out_sell}" + (f" | first: {first_out_sell}" if first_out_sell else ""),
+        "Phase timeline:",
+        f"Activation start: {first_activation or 'N/A'}",
+        f"Distribution start: {first_distribution or 'N/A'}",
+        f"Exit-prep start: {first_exit_prep or 'N/A'}",
+        f"First OUT/SELL: {first_out_sell or 'N/A'}",
+        f"Exit-prep lead time: {lead_time}",
+        f"Warning score: {warning}",
+        "Signal counts:",
+        f"Activation signals: {activation}",
+        f"Distribution signals: {distribution}",
+        f"Exit-prep signals: {exit_prep}",
+        f"OUT/SELL signals: {out_sell}",
     ]
 
     if out_sell >= 1:
@@ -511,7 +532,7 @@ def _build_case_summary(mint: str, events: list[dict[str, Any]], trade: dict[str
         f"- First OUT/SELL: {first_dist_out.get('detected_at') if first_dist_out else 'No'}",
         f"- Danger wallets seen: {', '.join(danger_seen_unique) if danger_seen_unique else 'No'}",
         "",
-        "📊 Group Phase Detector V1:",
+        "📊 Group Phase Detector V2:",
         f"- Current phase: {group_phase}",
         f"- Early wallets tracked: {len(first_wallets)}",
         f"- Danger wallets reached: {len(danger_seen_unique)}",
@@ -640,8 +661,8 @@ def build_forensics_timeline_report(mint_query: str = "", limit: int = 80) -> st
         "Investigation Notes:",
         "- This report reconstructs what happened from stored bot/forensics events.",
         "- Market snapshots depend on whether price/liquidity were stored in event details.",
-        "- V5.1 adds Group Phase Detector V1 from recorded group events.",
-        "- Future V5.2 can enrich events with more market data at recording time.",
+        "- V5.2 adds phase timing, lead-time, and warning score from recorded group events.",
+        "- Future V5.3 can enrich events with more market data at recording time.",
     ])
 
     return "\n".join(lines).strip()
