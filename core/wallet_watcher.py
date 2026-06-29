@@ -2724,6 +2724,18 @@ def mark_paper_copy_tp1(
     tp1_price = dex_info.get("price_usd") or _to_decimal(trade.get("last_price_usd"))
     liquidity = dex_info.get("liquidity_usd") or _to_decimal(trade.get("last_liquidity_usd"))
 
+    reason_text = str(trade.get("reason") or trade.get("entry_reason") or "")
+    wallet_text = str(trade.get("entry_wallet") or trade.get("wallet_label") or "")
+
+    is_3oue_trade = (
+        "3oUE" in reason_text
+        or "3oUE" in wallet_text
+        or "Cluster 3oUE" in reason_text
+        or "Cluster 3oUE" in wallet_text
+    )
+
+    tp1_close_pct = Decimal("70") if is_3oue_trade else PAPER_TP1_CLOSE_PERCENT
+
     tp1_pnl_pct = Decimal("0")
     if entry_price > 0:
         tp1_pnl_pct = ((tp1_price - entry_price) / entry_price) * Decimal("100")
@@ -2749,7 +2761,7 @@ def mark_paper_copy_tp1(
             (
                 _to_float(tp1_price),
                 _to_float(tp1_pnl_pct),
-                _to_float(PAPER_TP1_CLOSE_PERCENT),
+                _to_float(tp1_close_pct),
                 now,
                 _to_float(tp1_price),
                 _to_float(liquidity),
@@ -2760,19 +2772,27 @@ def mark_paper_copy_tp1(
         )
         conn.commit()
 
-    return "\n".join(
+    mode_note = "3oUE Defensive Mode: TP1 close raised to 70%." if is_3oue_trade else ""
+
+    lines = [
+        "✅ PAPER COPY TP1",
+        "",
+        f"Token: {symbol}",
+        f"Mint: {_short(mint)}",
+        f"Action: Paper partial take profit.",
+        "",
+        f"TP1 close: {_fmt_decimal(tp1_close_pct, 0)}%",
+        f"Entry price: {_fmt_price(entry_price)}",
+        f"TP1 price: {_fmt_price(tp1_price)}",
+        f"TP1 PnL: {_fmt_decimal(tp1_pnl_pct, 2)}%",
+        f"Liquidity: {_fmt_usd(liquidity)}",
+    ]
+
+    if mode_note:
+        lines.extend(["", mode_note])
+
+    lines.extend(
         [
-            "✅ PAPER COPY TP1",
-            "",
-            f"Token: {symbol}",
-            f"Mint: {_short(mint)}",
-            f"Action: Paper partial take profit.",
-            "",
-            f"TP1 close: {_fmt_decimal(PAPER_TP1_CLOSE_PERCENT, 0)}%",
-            f"Entry price: {_fmt_price(entry_price)}",
-            f"TP1 price: {_fmt_price(tp1_price)}",
-            f"TP1 PnL: {_fmt_decimal(tp1_pnl_pct, 2)}%",
-            f"Liquidity: {_fmt_usd(liquidity)}",
             "",
             "Remaining position protection:",
             f"Profit lock: +{_fmt_decimal(PAPER_AFTER_TP1_PROFIT_LOCK_PCT * Decimal('100'), 0)}% area",
@@ -2784,6 +2804,8 @@ def mark_paper_copy_tp1(
             "Mode: Paper only. No real sell was executed.",
         ]
     )
+
+    return "\n".join(lines)
 def mark_paper_copy_tp2(
     trade: dict[str, Any],
     dex_info: dict[str, Any],
