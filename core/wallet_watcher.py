@@ -4035,27 +4035,27 @@ def monitor_paper_copy_trades() -> list[str]:
             continue
 
         reason_text = str(trade.get("reason") or trade.get("entry_reason") or "")
-wallet_text = str(trade.get("entry_wallet") or trade.get("wallet_label") or "")
+        wallet_text = str(trade.get("entry_wallet") or trade.get("wallet_label") or "")
 
-is_3oue_trade = (
-    "3oUE" in reason_text
-    or "3oUE" in wallet_text
-    or "Cluster 3oUE" in reason_text
-    or "Cluster 3oUE" in wallet_text
-)
-
-stop_loss_pct = Decimal("0.15") if is_3oue_trade else PAPER_STOP_LOSS_PCT
-stop_loss_label = "15%" if is_3oue_trade else "25%"
-
-if entry_price > 0 and price <= entry_price * (Decimal("1") - stop_loss_pct):
-    messages.append(
-        close_paper_copy_trade(
-            trade,
-            reason=f"Stop loss: price dropped {stop_loss_label} from entry.",
-            dex_info=dex_info,
+        is_3oue_trade = (
+            "3oUE" in reason_text
+            or "3oUE" in wallet_text
+            or "Cluster 3oUE" in reason_text
+            or "Cluster 3oUE" in wallet_text
         )
-    )
-    continue
+
+        stop_loss_pct = Decimal("0.15") if is_3oue_trade else PAPER_STOP_LOSS_PCT
+        stop_loss_label = "15%" if is_3oue_trade else "25%"
+
+        if entry_price > 0 and price <= entry_price * (Decimal("1") - stop_loss_pct):
+            messages.append(
+                close_paper_copy_trade(
+                    trade=trade,
+                    reason=f"Stop loss: price dropped {stop_loss_label} from entry.",
+                    dex_info=dex_info,
+                )
+            )
+            continue
 
         if tp1_done and entry_price > 0 and price <= entry_price * (Decimal("1") + PAPER_AFTER_TP1_PROFIT_LOCK_PCT):
             messages.append(
@@ -4068,6 +4068,7 @@ if entry_price > 0 and price <= entry_price * (Decimal("1") - stop_loss_pct):
             continue
 
         trailing_drop = PAPER_TRAILING_AFTER_TP1_DROP_PCT if tp1_done else PAPER_TRAILING_DROP_PCT
+
         if peak_price > entry_price and price <= peak_price * (Decimal("1") - trailing_drop):
             messages.append(
                 close_paper_copy_trade(
